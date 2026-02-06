@@ -69,6 +69,7 @@ import {
   sanitizeToolsForGoogle,
 } from "../google.js";
 import { getDmHistoryLimitFromSessionKey, limitHistoryTurns } from "../history.js";
+import { sanitizeToolUseResultPairing } from "../../session-transcript-repair.js";
 import { log } from "../logger.js";
 import { buildModelAliasLines } from "../model.js";
 import {
@@ -558,9 +559,13 @@ export async function runEmbeddedAttempt(
           validated,
           getDmHistoryLimitFromSessionKey(params.sessionKey, params.config),
         );
-        cacheTrace?.recordStage("session:limited", { messages: limited });
-        if (limited.length > 0) {
-          activeSession.agent.replaceMessages(limited);
+        // After slicing history at user-turn boundaries, orphaned tool_result
+        // entries may remain without their matching tool_use block.  Sanitize
+        // the pairing so strict providers (Anthropic) don't reject the request.
+        const sanitized = sanitizeToolUseResultPairing(limited);
+        cacheTrace?.recordStage("session:limited", { messages: sanitized });
+        if (sanitized.length > 0) {
+          activeSession.agent.replaceMessages(sanitized);
         }
       } catch (err) {
         sessionManager.flushPendingToolResults?.();

@@ -60,6 +60,7 @@ import {
   sanitizeToolsForGoogle,
 } from "./google.js";
 import { getDmHistoryLimitFromSessionKey, limitHistoryTurns } from "./history.js";
+import { sanitizeToolUseResultPairing } from "../session-transcript-repair.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
 import { buildModelAliasLines, resolveModel } from "./model.js";
@@ -431,8 +432,11 @@ export async function compactEmbeddedPiSessionDirect(
           validated,
           getDmHistoryLimitFromSessionKey(params.sessionKey, params.config),
         );
-        if (limited.length > 0) {
-          session.agent.replaceMessages(limited);
+        // Sanitize tool_use/tool_result pairing after history truncation
+        // to prevent orphaned tool_result blocks that strict providers reject.
+        const sanitized = sanitizeToolUseResultPairing(limited);
+        if (sanitized.length > 0) {
+          session.agent.replaceMessages(sanitized);
         }
         const result = await session.compact(params.customInstructions);
         // Estimate tokens after compaction by summing token estimates for remaining messages
