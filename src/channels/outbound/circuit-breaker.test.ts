@@ -17,20 +17,16 @@ describe("CircuitBreaker", () => {
     text: "test message",
   });
 
-  const createSuccessResult = (message: OutboundMessage): OutboundResult => ({
+  const createSuccessResult = (_message: OutboundMessage): OutboundResult => ({
+    ok: true,
     messageId: "msg-123",
-    channel: message.channel,
-    to: message.to,
-    success: true,
-    timestamp: Date.now(),
+    deliveredAt: Date.now(),
   });
 
-  const createFailureResult = (message: OutboundMessage): OutboundResult => ({
-    channel: message.channel,
-    to: message.to,
-    success: false,
-    error: "Service error",
-    timestamp: Date.now(),
+  const createFailureResult = (_message: OutboundMessage): OutboundResult => ({
+    ok: false,
+    status: "Service error",
+    deliveredAt: Date.now(),
   });
 
   describe("CLOSED state", () => {
@@ -102,8 +98,8 @@ describe("CircuitBreaker", () => {
       const result = await middleware(message, next);
 
       expect(next).toHaveBeenCalledTimes(3); // Still 3, not 4
-      expect(result.success).toBe(false);
-      expect(result.error).toContain("Circuit breaker open");
+      expect(result.ok).toBe(false);
+      expect(result.status).toContain("Circuit breaker open");
     });
   });
 
@@ -158,7 +154,7 @@ describe("CircuitBreaker", () => {
       // Successful probe should close the circuit
       const result = await middleware(message, next);
 
-      expect(result.success).toBe(true);
+      expect(result.ok).toBe(true);
       expect(getState("slack")).toBe("CLOSED");
     });
 
@@ -185,7 +181,7 @@ describe("CircuitBreaker", () => {
       // Failed probe should re-open the circuit
       const result = await middleware(message, next);
 
-      expect(result.success).toBe(false);
+      expect(result.ok).toBe(false);
       expect(getState("slack")).toBe("OPEN");
     });
 
@@ -215,8 +211,8 @@ describe("CircuitBreaker", () => {
       // Second probe request should be rejected immediately
       const result2 = await middleware(message, next);
 
-      expect(result2.success).toBe(false);
-      expect(result2.error).toContain("probe in progress");
+      expect(result2.ok).toBe(false);
+      expect(result2.status).toContain("probe in progress");
       expect(next).toHaveBeenCalledTimes(callCount + 1); // Only one additional call
 
       await probe1Promise;
@@ -248,12 +244,12 @@ describe("CircuitBreaker", () => {
 
       // Slack should be rejected
       const slackResult = await middleware(slackMessage, slackNext);
-      expect(slackResult.success).toBe(false);
-      expect(slackResult.error).toContain("Circuit breaker open");
+      expect(slackResult.ok).toBe(false);
+      expect(slackResult.status).toContain("Circuit breaker open");
 
       // Discord should still work
       const discordResult = await middleware(discordMessage, discordNext);
-      expect(discordResult.success).toBe(true);
+      expect(discordResult.ok).toBe(true);
     });
   });
 

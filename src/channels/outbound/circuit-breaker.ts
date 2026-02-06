@@ -127,11 +127,9 @@ class CircuitBreaker {
     if (state === CircuitState.OPEN) {
       logger.debug(`Circuit open for channel ${channel}, rejecting message to ${message.to}`);
       return {
-        channel,
-        to: message.to,
-        success: false,
-        error: "Circuit breaker open - service unavailable",
-        timestamp: now,
+        ok: false,
+        status: "Circuit breaker open - service unavailable",
+        deliveredAt: now,
       };
     }
 
@@ -142,11 +140,9 @@ class CircuitBreaker {
           `Probe already in flight for channel ${channel}, rejecting message to ${message.to}`,
         );
         return {
-          channel,
-          to: message.to,
-          success: false,
-          error: "Circuit breaker half-open - probe in progress",
-          timestamp: now,
+          ok: false,
+          status: "Circuit breaker half-open - probe in progress",
+          deliveredAt: now,
         };
       }
       circuit.probeInFlight = true;
@@ -157,7 +153,7 @@ class CircuitBreaker {
     try {
       const result = await next(message);
 
-      if (result.success) {
+      if (result.ok) {
         this.recordSuccess(channel);
       } else {
         this.recordFailure(channel, now);
