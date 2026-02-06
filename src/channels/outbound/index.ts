@@ -23,5 +23,19 @@ export {
   createOutboundPipeline,
   getOutboundMetrics,
   resetOutboundMetrics,
+  getOutboundQueue,
+  setOutboundQueue,
   type OutboundConfig,
 } from "./pipeline.js";
+export { type QueueStore, type QueueEntry, type QueueStats } from "./queue-store.js";
+export { SqliteQueueStore, type SqliteQueueStoreConfig } from "./sqlite-queue-store.js";
+export { createRedisQueueStore, type RedisQueueStoreConfig } from "./redis-queue-store.js";
+export { JsonlAuditStore, type AuditEntry, type JsonlAuditConfig } from "./jsonl-audit-store.js";
+export { MultiBackendQueue } from "./multi-backend-queue.js";
+export {
+  createQueueStore,
+  type QueueStoreFactoryConfig,
+  type StoreMode,
+} from "./queue-store-factory.js";
+export { createDeliveryAdapter } from "./delivery-adapter.js";
+export { QueueWorker, type QueueWorkerConfig } from "./queue-worker.js";

@@ -1,4 +1,6 @@
+import type { QueueStore } from "./queue-store.js";
 import { loadConfig } from "../../config/config.js";
+import { createCircuitBreakerMiddleware, type CircuitBreakerConfig } from "./circuit-breaker.js";
 import { createDedupMiddleware } from "./dedup.js";
 import { createLogMiddleware } from "./log.js";
 import { createMetricsMiddleware, type MetricsSnapshot } from "./metrics.js";
@@ -9,7 +11,6 @@ import {
   type OutboundMiddleware,
   type OutboundResult,
 } from "./middleware.js";
-import { OutboundQueue } from "./queue.js";
 import { createRateLimitMiddleware } from "./rate-limit.js";
 import { createRetryMiddleware } from "./retry.js";
 import { createValidateMiddleware } from "./validate.js";
@@ -19,10 +20,17 @@ export type OutboundConfig = {
   dedup?: { ttlMs?: number; maxSize?: number };
   rateLimits?: Partial<Record<ChannelId, number>>;
   retry?: { attempts?: number; minDelayMs?: number; maxDelayMs?: number; jitter?: number };
+  /** When true, skip pipeline retry middleware (queue handles retry instead). */
+  queueRetry?: boolean;
+  circuitBreaker?: Partial<CircuitBreakerConfig>;
+  store?: string;
+  redis?: { url?: string; prefix?: string };
+  sqlite?: { path?: string };
+  audit?: { enabled?: boolean; path?: string; maxSizeMb?: number };
 };
 
 let _metricsHandle: ReturnType<typeof createMetricsMiddleware> | null = null;
-let _queue: OutboundQueue | null = null;
+let _queue: QueueStore | null = null;
 
 export function getOutboundMetrics(): MetricsSnapshot | null {
   return _metricsHandle?.snapshot() ?? null;
@@ -32,11 +40,12 @@ export function resetOutboundMetrics(): void {
   _metricsHandle?.reset();
 }
 
-export function getOutboundQueue(): OutboundQueue {
-  if (!_queue) {
-    _queue = new OutboundQueue({ dbPath: ":memory:" });
-  }
+export function getOutboundQueue(): QueueStore | null {
   return _queue;
+}
+
+export function setOutboundQueue(queue: QueueStore): void {
+  _queue = queue;
 }
 
 function resolveOutboundConfig(): OutboundConfig {
@@ -54,7 +63,10 @@ function resolveOutboundConfig(): OutboundConfig {
 
 /**
  * Build the default middleware stack from config.
- * Order: log → validate → dedup → rate-limit → retry → (send)
+ * Order: log → validate → dedup → metrics → circuit-breaker → rate-limit → [retry] → (send)
+ *
+ * When queue-based retry is active (`queueRetry: true`), the retry middleware is skipped
+ * to avoid double-retry (queue already handles exponential backoff).
  */
 function buildMiddlewareStack(config: OutboundConfig): OutboundMiddleware[] {
   const stack: OutboundMiddleware[] = [];
@@ -79,22 +91,33 @@ function buildMiddlewareStack(config: OutboundConfig): OutboundMiddleware[] {
   }
   stack.push(_metricsHandle.middleware);
 
-  // 5. Rate limiting
+  // 5. Circuit breaker (reject fast when channel is down)
+  stack.push(
+    createCircuitBreakerMiddleware({
+      failureThreshold: config.circuitBreaker?.failureThreshold,
+      resetTimeoutMs: config.circuitBreaker?.resetTimeoutMs,
+      windowMs: config.circuitBreaker?.windowMs,
+    }),
+  );
+
+  // 6. Rate limiting
   stack.push(
     createRateLimitMiddleware({
       rates: config.rateLimits,
     }),
   );
 
-  // 6. Retry (innermost: wraps actual delivery)
-  stack.push(
-    createRetryMiddleware({
-      attempts: config.retry?.attempts,
-      minDelayMs: config.retry?.minDelayMs,
-      maxDelayMs: config.retry?.maxDelayMs,
-      jitter: config.retry?.jitter,
-    }),
-  );
+  // 7. Retry (innermost: wraps actual delivery) — skip when queue handles retry
+  if (!config.queueRetry) {
+    stack.push(
+      createRetryMiddleware({
+        attempts: config.retry?.attempts,
+        minDelayMs: config.retry?.minDelayMs,
+        maxDelayMs: config.retry?.maxDelayMs,
+        jitter: config.retry?.jitter,
+      }),
+    );
+  }
 
   return stack;
 }

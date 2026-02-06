@@ -576,6 +576,37 @@ export const OpenClawSchema = z
           })
           .strict()
           .optional(),
+        store: z.enum(["auto", "sqlite", "redis", "multi"]).optional(),
+        redis: z
+          .object({
+            url: z.string().optional(),
+            prefix: z.string().optional(),
+          })
+          .strict()
+          .optional(),
+        sqlite: z
+          .object({
+            path: z.string().optional(),
+          })
+          .strict()
+          .optional(),
+        audit: z
+          .object({
+            enabled: z.boolean().optional(),
+            path: z.string().optional(),
+            maxSizeMb: z.number().positive().optional(),
+          })
+          .strict()
+          .optional(),
+        circuitBreaker: z
+          .object({
+            failureThreshold: z.number().int().positive().optional(),
+            resetTimeoutMs: z.number().int().positive().optional(),
+            windowMs: z.number().int().positive().optional(),
+          })
+          .strict()
+          .optional(),
+        queueRetry: z.boolean().optional(),
       })
       .strict()
       .optional(),

@@ -183,7 +183,7 @@ export function getCircuitState(
 ): CircuitState | null {
   // This is a bit of a hack to expose internal state for testing/monitoring
   // In production, you might want a more robust solution
-  const breaker = (middleware as any).__breaker as CircuitBreaker | undefined;
+  const breaker = (middleware as unknown as { __breaker?: CircuitBreaker }).__breaker;
   if (!breaker) {
     return null;
   }

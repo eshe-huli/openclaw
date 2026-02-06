@@ -19,12 +19,22 @@ export type OutboundRetryConfig = {
   jitter?: number;
 };
 
+export type OutboundStoreConfig = {
+  store?: "auto" | "sqlite" | "redis" | "multi";
+  redis?: { url?: string; prefix?: string };
+  sqlite?: { path?: string };
+  audit?: { enabled?: boolean; path?: string; maxSizeMb?: number };
+  circuitBreaker?: { failureThreshold?: number; resetTimeoutMs?: number; windowMs?: number };
+  /** When true, skip pipeline retry middleware (queue handles retry instead). */
+  queueRetry?: boolean;
+};
+
 export type OutboundMiddlewareConfig = {
   enabled?: boolean;
   dedup?: { ttlMs?: number; maxSize?: number };
   rateLimits?: Partial<Record<string, number>>;
   retry?: OutboundRetryConfig;
-};
+} & OutboundStoreConfig;
 
 export type BlockStreamingCoalesceConfig = {
   minChars?: number;

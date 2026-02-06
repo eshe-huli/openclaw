@@ -113,7 +113,9 @@ export function attachGatewayWsConnectionHandler(params: {
       try {
         socket.send(JSON.stringify(obj));
       } catch (err) {
-        if (!closed) logWsControl.debug(`ws send failed conn=${connId}: ${formatError(err)}`);
+        if (!closed) {
+          logWsControl.debug(`ws send failed conn=${connId}: ${formatError(err)}`);
+        }
       }
     };
 

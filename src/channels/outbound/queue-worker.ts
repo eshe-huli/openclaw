@@ -1,5 +1,5 @@
 import type { OutboundMessage, OutboundResult } from "./middleware.js";
-import type { OutboundQueue } from "./queue.js";
+import type { QueueStore } from "./queue-store.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 
@@ -13,7 +13,7 @@ export type QueueWorkerConfig = {
 };
 
 export class QueueWorker {
-  private queue: OutboundQueue;
+  private queue: QueueStore;
   private send: (msg: OutboundMessage) => Promise<OutboundResult>;
   private pollIntervalMs: number;
   private batchSize: number;
@@ -21,7 +21,7 @@ export class QueueWorker {
   private running = false;
 
   constructor(
-    queue: OutboundQueue,
+    queue: QueueStore,
     send: (msg: OutboundMessage) => Promise<OutboundResult>,
     config: QueueWorkerConfig = {},
   ) {
@@ -32,7 +32,9 @@ export class QueueWorker {
   }
 
   start(): void {
-    if (this.running) return;
+    if (this.running) {
+      return;
+    }
     this.running = true;
     this.timer = setInterval(() => {
       this.processBatch().catch((err) => {
@@ -52,22 +54,31 @@ export class QueueWorker {
   }
 
   private async processBatch(): Promise<void> {
-    const entries = this.queue.dequeue(this.batchSize);
-    if (entries.length === 0) return;
+    const entries = await this.queue.dequeue(this.batchSize);
+    if (entries.length === 0) {
+      return;
+    }
 
     log.debug(`processing ${entries.length} queued messages`);
 
-    for (const entry of entries) {
-      try {
-        const result = await this.send(entry.message);
-        if (result.ok) {
-          this.queue.complete(entry.id);
-        } else {
-          this.queue.fail(entry.id, result.status ?? "delivery returned ok=false");
+    const results = await Promise.allSettled(
+      entries.map(async (entry) => {
+        try {
+          const result = await this.send(entry.message);
+          if (result.ok) {
+            await this.queue.complete(entry.id);
+          } else {
+            await this.queue.fail(entry.id, result.status ?? "delivery returned ok=false");
+          }
+        } catch (err) {
+          await this.queue.fail(entry.id, formatErrorMessage(err));
         }
-      } catch (err) {
-        this.queue.fail(entry.id, formatErrorMessage(err));
-      }
+      }),
+    );
+
+    const failures = results.filter((r) => r.status === "rejected");
+    if (failures.length > 0) {
+      log.warn(`${failures.length}/${entries.length} batch entries had queue-level errors`);
     }
   }
 }

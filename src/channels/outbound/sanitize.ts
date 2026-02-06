@@ -37,7 +37,8 @@ const logger = createSubsystemLogger("sanitize");
 // Zero-width characters commonly used for tracking/fingerprinting
 const ZERO_WIDTH_CHARS = /[\u200B\u200C\u200D\uFEFF\u2060]/g;
 
-// ANSI escape sequences
+// ANSI escape sequences — control character is intentional for sanitization
+// eslint-disable-next-line no-control-regex
 const ANSI_ESCAPE = /\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g;
 
 // Per-channel maximum text length

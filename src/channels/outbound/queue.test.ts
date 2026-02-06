@@ -35,7 +35,7 @@ describe("OutboundQueue", () => {
   });
 
   it("complete removes entry from queue", () => {
-    const id = queue.enqueue(makeMsg());
+    queue.enqueue(makeMsg());
     const [entry] = queue.dequeue();
     queue.complete(entry.id);
     expect(queue.stats().pending).toBe(0);

@@ -44,7 +44,9 @@ export function createRateLimitMiddleware(config: RateLimitConfig = {}): Outboun
   }
 
   function evictStaleBuckets(): void {
-    if (buckets.size <= 1000) return;
+    if (buckets.size <= 1000) {
+      return;
+    }
 
     const now = Date.now();
     const staleThreshold = 5 * 60 * 1000; // 5 minutes

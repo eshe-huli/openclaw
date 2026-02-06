@@ -54,10 +54,14 @@ export function feishuPostToText(raw: unknown): string {
     lines.push(locale.title.trim());
   }
   for (const line of locale.content) {
-    if (!Array.isArray(line)) continue;
+    if (!Array.isArray(line)) {
+      continue;
+    }
     const parts: string[] = [];
     for (const el of line) {
-      if (!el || typeof el !== "object") continue;
+      if (!el || typeof el !== "object") {
+        continue;
+      }
       const element = el as Record<string, unknown>;
       if (element.tag === "text" && typeof element.text === "string") {
         parts.push(element.text);

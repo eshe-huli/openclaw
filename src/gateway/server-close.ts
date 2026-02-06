@@ -124,7 +124,11 @@ export function createGatewayCloseHandler(params: {
         const timer = setTimeout(() => resolve(), 30_000);
         httpServer.close((err) => {
           clearTimeout(timer);
-          err ? reject(err) : resolve();
+          if (err) {
+            reject(err);
+          } else {
+            resolve();
+          }
         });
       });
     }

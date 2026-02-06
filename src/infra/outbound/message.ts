@@ -1,5 +1,7 @@
+import type { ChannelId, OutboundMessage } from "../../channels/outbound/middleware.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { PollInput } from "../../polls.js";
+import { createOutboundPipeline } from "../../channels/outbound/pipeline.js";
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import { loadConfig } from "../../config/config.js";
 import { callGateway, randomIdempotencyKey } from "../../gateway/call.js";
@@ -157,6 +159,66 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
     });
     if (!resolvedTarget.ok) {
       throw resolvedTarget.error;
+    }
+
+    // Wrap delivery with the outbound middleware pipeline (dedup, metrics, circuit-breaker, etc.)
+    const outboundCfg = (cfg as Record<string, unknown>).outbound as
+      | { enabled?: boolean }
+      | undefined;
+    if (outboundCfg && outboundCfg.enabled !== false) {
+      const pipelineMsg: OutboundMessage = {
+        channel: outboundChannel as ChannelId,
+        to: resolvedTarget.to,
+        text: normalizedPayloads
+          .map((p) => p.text)
+          .filter(Boolean)
+          .join("\n"),
+        mediaUrl: normalizedPayloads[0]?.mediaUrl,
+        accountId: params.accountId,
+        extra: {
+          payloads: normalizedPayloads,
+          cfg,
+          gifPlayback: params.gifPlayback,
+          deps: params.deps,
+          bestEffort: params.bestEffort,
+          abortSignal: params.abortSignal,
+          mirror: params.mirror,
+        },
+      };
+
+      const pipelineSend = createOutboundPipeline(outboundChannel as ChannelId, async (msg) => {
+        const deliveryResults = await deliverOutboundPayloads({
+          cfg,
+          channel: outboundChannel,
+          to: msg.to,
+          accountId: msg.accountId,
+          payloads: (msg.extra?.payloads as typeof normalizedPayloads) ?? normalizedPayloads,
+          gifPlayback: msg.extra?.gifPlayback as boolean | undefined,
+          deps: msg.extra?.deps as OutboundSendDeps | undefined,
+          bestEffort: msg.extra?.bestEffort as boolean | undefined,
+          abortSignal: msg.extra?.abortSignal as AbortSignal | undefined,
+          mirror: params.mirror
+            ? {
+                ...params.mirror,
+                text: mirrorText || params.content,
+                mediaUrls: mirrorMediaUrls.length ? mirrorMediaUrls : undefined,
+              }
+            : undefined,
+        });
+        const last = deliveryResults.at(-1);
+        return { ok: true, messageId: last?.messageId, deliveredAt: Date.now() };
+      });
+
+      const pipelineResult = await pipelineSend(pipelineMsg);
+
+      return {
+        channel,
+        to: params.to,
+        via: "direct",
+        mediaUrl: primaryMediaUrl,
+        mediaUrls: mirrorMediaUrls.length ? mirrorMediaUrls : undefined,
+        result: pipelineResult.ok ? { messageId: pipelineResult.messageId ?? "" } : undefined,
+      };
     }
 
     const results = await deliverOutboundPayloads({

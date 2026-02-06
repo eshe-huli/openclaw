@@ -3,7 +3,7 @@ import type { OutboundMessage, OutboundResult } from "./middleware.js";
 import { createSanitizeMiddleware } from "./sanitize.js";
 
 describe("sanitize middleware", () => {
-  const mockNext = async (msg: OutboundMessage): Promise<OutboundResult> => ({
+  const mockNext = async (_msg: OutboundMessage): Promise<OutboundResult> => ({
     ok: true,
     messageId: "test-123",
     deliveredAt: Date.now(),

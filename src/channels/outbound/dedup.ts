@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import type { OutboundMiddleware, OutboundMessage } from "./middleware.js";
 import { createDedupeCache, type DedupeCache } from "../../infra/dedupe.js";
 
@@ -7,9 +6,19 @@ export type DedupConfig = {
   maxSize?: number;
 };
 
+/** FNV-1a 32-bit hash — ~10x faster than SHA-256 for short dedup keys. */
+function fnv1a32(str: string): string {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < str.length; i++) {
+    hash ^= str.charCodeAt(i);
+    hash = (hash * 0x01000193) | 0;
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
+}
+
 function contentHash(msg: OutboundMessage): string {
   const payload = `${msg.channel}:${msg.accountId ?? ""}:${msg.to}:${msg.text}:${msg.mediaUrl ?? ""}`;
-  return createHash("sha256").update(payload).digest("hex").slice(0, 16);
+  return fnv1a32(payload);
 }
 
 export function createDedupMiddleware(config: DedupConfig = {}): OutboundMiddleware {

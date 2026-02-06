@@ -10,7 +10,15 @@ export const deadLetterHandlers: GatewayRequestHandlers = {
     const rawLimit = typeof params.limit === "number" ? params.limit : 50;
     const limit = Math.min(Math.max(1, rawLimit), 500);
     const queue = getOutboundQueue();
-    const deadLetters = queue.deadLetters(limit);
+    if (!queue) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "outbound queue not initialized"),
+      );
+      return;
+    }
+    const deadLetters = await queue.deadLetters(limit);
 
     const formatted = deadLetters.map((entry) => ({
       id: entry.id,
@@ -21,7 +29,6 @@ export const deadLetterHandlers: GatewayRequestHandlers = {
       attempts: entry.attempts,
       lastError: entry.lastError,
       createdAt: new Date(entry.createdAt).toISOString(),
-      metadata: entry.message.metadata,
     }));
 
     log.debug(`listing ${formatted.length} dead letters`);
@@ -36,7 +43,15 @@ export const deadLetterHandlers: GatewayRequestHandlers = {
     }
 
     const queue = getOutboundQueue();
-    const success = queue.retryDeadLetter(id);
+    if (!queue) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "outbound queue not initialized"),
+      );
+      return;
+    }
+    const success = await queue.retryDeadLetter(id);
 
     if (success) {
       log.info(`retried dead letter ${id}`);
@@ -49,7 +64,15 @@ export const deadLetterHandlers: GatewayRequestHandlers = {
 
   "outbound.deadLetters.purge": async ({ respond }) => {
     const queue = getOutboundQueue();
-    const deleted = queue.purgeDeadLetters();
+    if (!queue) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "outbound queue not initialized"),
+      );
+      return;
+    }
+    const deleted = await queue.purgeDeadLetters();
 
     log.info(`purged ${deleted} dead letters`);
     respond(true, { deleted });
@@ -57,7 +80,15 @@ export const deadLetterHandlers: GatewayRequestHandlers = {
 
   "outbound.queue.stats": async ({ respond }) => {
     const queue = getOutboundQueue();
-    const stats = queue.stats();
+    if (!queue) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "outbound queue not initialized"),
+      );
+      return;
+    }
+    const stats = await queue.stats();
 
     log.debug(`queue stats: ${JSON.stringify(stats)}`);
     respond(true, stats);

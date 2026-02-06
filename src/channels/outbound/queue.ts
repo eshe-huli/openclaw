@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { OutboundMessage, OutboundResult } from "./middleware.js";
+import type { OutboundMessage } from "./middleware.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { requireNodeSqlite } from "../../memory/sqlite.js";
 
@@ -124,7 +124,9 @@ export class OutboundQueue {
     const row = this.db
       .prepare(`SELECT attempts, max_attempts FROM outbound_queue WHERE id = ?`)
       .get(id) as { attempts: number; max_attempts: number } | undefined;
-    if (!row) return;
+    if (!row) {
+      return;
+    }
 
     const newAttempts = row.attempts + 1;
     if (newAttempts >= row.max_attempts) {

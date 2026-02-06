@@ -178,6 +178,9 @@
     "@napi-rs/canvas": "^0.1.89",
     "node-llama-cpp": "3.15.1"
   },
+  "optionalDependencies": {
+    "ioredis": "^5.6.1"
+  },
   "overrides": {
     "tar": "7.5.7"
   },
