@@ -9,6 +9,7 @@ import {
   type OutboundMiddleware,
   type OutboundResult,
 } from "./middleware.js";
+import { OutboundQueue } from "./queue.js";
 import { createRateLimitMiddleware } from "./rate-limit.js";
 import { createRetryMiddleware } from "./retry.js";
 import { createValidateMiddleware } from "./validate.js";
@@ -21,6 +22,7 @@ export type OutboundConfig = {
 };
 
 let _metricsHandle: ReturnType<typeof createMetricsMiddleware> | null = null;
+let _queue: OutboundQueue | null = null;
 
 export function getOutboundMetrics(): MetricsSnapshot | null {
   return _metricsHandle?.snapshot() ?? null;
@@ -28,6 +30,13 @@ export function getOutboundMetrics(): MetricsSnapshot | null {
 
 export function resetOutboundMetrics(): void {
   _metricsHandle?.reset();
+}
+
+export function getOutboundQueue(): OutboundQueue {
+  if (!_queue) {
+    _queue = new OutboundQueue({ dbPath: ":memory:" });
+  }
+  return _queue;
 }
 
 function resolveOutboundConfig(): OutboundConfig {

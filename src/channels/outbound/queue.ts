@@ -183,6 +183,37 @@ export class OutboundQueue {
     return result;
   }
 
+  /** Retry a dead letter by moving it back to pending. */
+  retryDeadLetter(id: string): boolean {
+    const row = this.db.prepare(`SELECT status FROM outbound_queue WHERE id = ?`).get(id) as
+      | { status: string }
+      | undefined;
+
+    if (!row || row.status !== "dead") {
+      return false;
+    }
+
+    const now = Date.now();
+    this.db
+      .prepare(
+        `UPDATE outbound_queue
+         SET status = 'pending', attempts = 0, last_error = NULL, next_attempt_at = ?
+         WHERE id = ?`,
+      )
+      .run(now, id);
+
+    log.info(`dead letter ${id} moved back to pending for retry`);
+    return true;
+  }
+
+  /** Purge all dead letters from the queue. */
+  purgeDeadLetters(): number {
+    const result = this.db.prepare(`DELETE FROM outbound_queue WHERE status = 'dead'`).run();
+    const deleted = Number(result.changes ?? 0);
+    log.info(`purged ${deleted} dead letters`);
+    return deleted;
+  }
+
   close(): void {
     this.db.close();
   }

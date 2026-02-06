@@ -12,6 +12,13 @@ export { createMetricsMiddleware, type DeliveryMetrics, type MetricsSnapshot } f
 export { createRetryMiddleware, type OutboundRetryConfig } from "./retry.js";
 export { createLogMiddleware } from "./log.js";
 export { createMediaValidateMiddleware, type MediaValidateConfig } from "./media-validate.js";
+export { createSanitizeMiddleware, type SanitizeConfig } from "./sanitize.js";
+export {
+  createCircuitBreakerMiddleware,
+  createInspectableCircuitBreakerMiddleware,
+  getCircuitState,
+  type CircuitBreakerConfig,
+} from "./circuit-breaker.js";
 export {
   createOutboundPipeline,
   getOutboundMetrics,
