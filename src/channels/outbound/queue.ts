@@ -69,29 +69,36 @@ export class OutboundQueue {
   /** Fetch up to `limit` messages ready for delivery. */
   dequeue(limit = 10): QueueEntry[] {
     const now = Date.now();
-    const rows = this.db
-      .prepare(
-        `SELECT id, message, attempts, max_attempts, created_at, next_attempt_at, status, last_error
-         FROM outbound_queue
-         WHERE status = 'pending' AND next_attempt_at <= ?
-         ORDER BY next_attempt_at ASC
-         LIMIT ?`,
-      )
-      .all(now, limit) as Array<{
-      id: string;
-      message: string;
-      attempts: number;
-      max_attempts: number;
-      created_at: number;
-      next_attempt_at: number;
-      status: string;
-      last_error: string | null;
-    }>;
 
-    const entries: QueueEntry[] = [];
-    for (const row of rows) {
-      this.db.prepare(`UPDATE outbound_queue SET status = 'processing' WHERE id = ?`).run(row.id);
-      entries.push({
+    // Use transaction to prevent race conditions between SELECT and UPDATE
+    this.db.exec("BEGIN");
+    try {
+      const rows = this.db
+        .prepare(
+          `UPDATE outbound_queue
+           SET status = 'processing'
+           WHERE id IN (
+             SELECT id FROM outbound_queue
+             WHERE status = 'pending' AND next_attempt_at <= ?
+             ORDER BY next_attempt_at ASC
+             LIMIT ?
+           )
+           RETURNING id, message, attempts, max_attempts, created_at, next_attempt_at, status, last_error`,
+        )
+        .all(now, limit) as Array<{
+        id: string;
+        message: string;
+        attempts: number;
+        max_attempts: number;
+        created_at: number;
+        next_attempt_at: number;
+        status: string;
+        last_error: string | null;
+      }>;
+
+      this.db.exec("COMMIT");
+
+      return rows.map((row) => ({
         id: row.id,
         message: JSON.parse(row.message) as OutboundMessage,
         attempts: row.attempts,
@@ -100,9 +107,11 @@ export class OutboundQueue {
         nextAttemptAt: row.next_attempt_at,
         status: "processing",
         lastError: row.last_error ?? undefined,
-      });
+      }));
+    } catch (err) {
+      this.db.exec("ROLLBACK");
+      throw err;
     }
-    return entries;
   }
 
   /** Mark entry as successfully delivered and remove from queue. */

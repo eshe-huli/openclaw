@@ -22,6 +22,7 @@ const DEFAULT_RATES: Record<ChannelId, number> = {
 type Bucket = {
   tokens: number;
   lastRefill: number;
+  lastAccess: number;
   rate: number;
 };
 
@@ -30,13 +31,38 @@ export function createRateLimitMiddleware(config: RateLimitConfig = {}): Outboun
 
   function getBucket(channel: ChannelId, accountId?: string): Bucket {
     const key = accountId ? `${channel}:${accountId}` : channel;
+    const now = Date.now();
     let bucket = buckets.get(key);
     if (!bucket) {
       const rate = config.rates?.[channel] ?? DEFAULT_RATES[channel] ?? 10;
-      bucket = { tokens: rate, lastRefill: Date.now(), rate };
+      bucket = { tokens: rate, lastRefill: now, lastAccess: now, rate };
       buckets.set(key, bucket);
+    } else {
+      bucket.lastAccess = now;
     }
     return bucket;
+  }
+
+  function evictStaleBuckets(): void {
+    if (buckets.size <= 1000) return;
+
+    const now = Date.now();
+    const staleThreshold = 5 * 60 * 1000; // 5 minutes
+    const keysToDelete: string[] = [];
+
+    for (const [key, bucket] of buckets.entries()) {
+      if (now - bucket.lastAccess > staleThreshold) {
+        keysToDelete.push(key);
+      }
+    }
+
+    for (const key of keysToDelete) {
+      buckets.delete(key);
+    }
+
+    if (keysToDelete.length > 0) {
+      log.debug(`evicted ${keysToDelete.length} stale rate limit buckets`);
+    }
   }
 
   function tryConsume(bucket: Bucket): boolean {
@@ -44,8 +70,10 @@ export function createRateLimitMiddleware(config: RateLimitConfig = {}): Outboun
     const elapsed = (now - bucket.lastRefill) / 1000;
     bucket.tokens = Math.min(bucket.rate, bucket.tokens + elapsed * bucket.rate);
     bucket.lastRefill = now;
+    bucket.lastAccess = now;
     if (bucket.tokens >= 1) {
       bucket.tokens -= 1;
+      evictStaleBuckets();
       return true;
     }
     return false;

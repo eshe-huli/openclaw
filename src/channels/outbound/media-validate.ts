@@ -24,12 +24,46 @@ export type MediaValidateConfig = {
   headTimeoutMs?: number;
 };
 
+function isPrivateIp(hostname: string): boolean {
+  // Block localhost and private IP ranges
+  if (hostname === "localhost" || hostname === "0.0.0.0") return true;
+
+  // Parse IP address (basic IPv4 check)
+  const ipMatch = hostname.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
+  if (!ipMatch) return false; // Not an IP, allow (will be resolved by DNS)
+
+  const octets = ipMatch.slice(1, 5).map(Number);
+
+  // 127.0.0.0/8 (loopback)
+  if (octets[0] === 127) return true;
+
+  // 10.0.0.0/8 (private)
+  if (octets[0] === 10) return true;
+
+  // 172.16.0.0/12 (private)
+  if (octets[0] === 172 && octets[1] >= 16 && octets[1] <= 31) return true;
+
+  // 192.168.0.0/16 (private)
+  if (octets[0] === 192 && octets[1] === 168) return true;
+
+  // 169.254.0.0/16 (link-local)
+  if (octets[0] === 169 && octets[1] === 254) return true;
+
+  return false;
+}
+
 function isValidUrl(url: string): boolean {
   try {
     const parsed = new URL(url);
-    return (
-      parsed.protocol === "http:" || parsed.protocol === "https:" || parsed.protocol === "file:"
-    );
+    // Only allow http and https protocols
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return false;
+    }
+    // Block private IP addresses
+    if (isPrivateIp(parsed.hostname)) {
+      return false;
+    }
+    return true;
   } catch {
     return false;
   }
@@ -65,7 +99,7 @@ export function createMediaValidateMiddleware(
         const resp = await fetch(msg.mediaUrl, {
           method: "HEAD",
           signal: controller.signal,
-          redirect: "follow",
+          redirect: "manual",
         });
         clearTimeout(timer);
 

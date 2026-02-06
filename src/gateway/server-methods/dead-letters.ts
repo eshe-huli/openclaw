@@ -7,7 +7,8 @@ const log = createSubsystemLogger("dead-letters");
 
 export const deadLetterHandlers: GatewayRequestHandlers = {
   "outbound.deadLetters": async ({ respond, params }) => {
-    const limit = typeof params.limit === "number" ? params.limit : 50;
+    const rawLimit = typeof params.limit === "number" ? params.limit : 50;
+    const limit = Math.min(Math.max(1, rawLimit), 500);
     const queue = getOutboundQueue();
     const deadLetters = queue.deadLetters(limit);
 

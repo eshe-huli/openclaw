@@ -35,7 +35,9 @@ export class QueueWorker {
     if (this.running) return;
     this.running = true;
     this.timer = setInterval(() => {
-      void this.processBatch();
+      this.processBatch().catch((err) => {
+        log.error(`queue worker poll error: ${formatErrorMessage(err)}`);
+      });
     }, this.pollIntervalMs);
     log.info(`queue worker started (poll=${this.pollIntervalMs}ms, batch=${this.batchSize})`);
   }
