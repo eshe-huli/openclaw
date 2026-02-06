@@ -69,7 +69,7 @@ import {
   sanitizeToolsForGoogle,
 } from "../google.js";
 import { getDmHistoryLimitFromSessionKey, limitHistoryTurns } from "../history.js";
-import { sanitizeToolUseResultPairing } from "../../session-transcript-repair.js";
+import { sanitizeToolCallInputs, sanitizeToolUseResultPairing } from "../../session-transcript-repair.js";
 import { log } from "../logger.js";
 import { buildModelAliasLines } from "../model.js";
 import {
@@ -560,9 +560,10 @@ export async function runEmbeddedAttempt(
           getDmHistoryLimitFromSessionKey(params.sessionKey, params.config),
         );
         // After slicing history at user-turn boundaries, orphaned tool_result
-        // entries may remain without their matching tool_use block.  Sanitize
-        // the pairing so strict providers (Anthropic) don't reject the request.
-        const sanitized = sanitizeToolUseResultPairing(limited);
+        // entries may remain without their matching tool_use block, and tool_call
+        // blocks may lack input/arguments.  Sanitize both so strict providers
+        // (Anthropic) don't reject the request.
+        const sanitized = sanitizeToolUseResultPairing(sanitizeToolCallInputs(limited));
         cacheTrace?.recordStage("session:limited", { messages: sanitized });
         if (sanitized.length > 0) {
           activeSession.agent.replaceMessages(sanitized);
@@ -757,7 +758,11 @@ export async function runEmbeddedAttempt(
             sessionManager.resetLeaf();
           }
           const sessionContext = sessionManager.buildSessionContext();
-          activeSession.agent.replaceMessages(sessionContext.messages);
+          // Sanitize after tree rebuild — branch/resetLeaf can produce orphaned pairs.
+          const repairedContext = sanitizeToolUseResultPairing(
+            sanitizeToolCallInputs(sessionContext.messages),
+          );
+          activeSession.agent.replaceMessages(repairedContext);
           log.warn(
             `Removed orphaned user message to prevent consecutive user turns. ` +
               `runId=${params.runId} sessionId=${params.sessionId}`,
