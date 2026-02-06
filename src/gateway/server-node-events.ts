@@ -11,6 +11,27 @@ import { defaultRuntime } from "../runtime.js";
 import { loadSessionEntry } from "./session-utils.js";
 import { formatForLog } from "./ws-log.js";
 
+const MAX_PENDING_AGENT_COMMANDS = 3;
+const pendingAgentCommands = new Map<string, number>();
+
+function trackAgentCommand(nodeId: string): boolean {
+  const current = pendingAgentCommands.get(nodeId) ?? 0;
+  if (current >= MAX_PENDING_AGENT_COMMANDS) {
+    return false;
+  }
+  pendingAgentCommands.set(nodeId, current + 1);
+  return true;
+}
+
+function releaseAgentCommand(nodeId: string): void {
+  const current = pendingAgentCommands.get(nodeId) ?? 0;
+  if (current <= 1) {
+    pendingAgentCommands.delete(nodeId);
+  } else {
+    pendingAgentCommands.set(nodeId, current - 1);
+  }
+}
+
 export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt: NodeEvent) => {
   switch (evt.event) {
     case "voice.transcript": {
@@ -62,6 +83,12 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
         clientRunId: `voice-${randomUUID()}`,
       });
 
+      if (!trackAgentCommand(nodeId)) {
+        ctx.logGateway.warn(
+          `dropping voice.transcript for node=${nodeId}: concurrency limit reached`,
+        );
+        return;
+      }
       void agentCommand(
         {
           message: text,
@@ -73,9 +100,13 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
         },
         defaultRuntime,
         ctx.deps,
-      ).catch((err) => {
-        ctx.logGateway.warn(`agent failed node=${nodeId}: ${formatForLog(err)}`);
-      });
+      )
+        .catch((err) => {
+          ctx.logGateway.warn(`agent failed node=${nodeId}: ${formatForLog(err)}`);
+        })
+        .finally(() => {
+          releaseAgentCommand(nodeId);
+        });
       return;
     }
     case "agent.request": {
@@ -132,6 +163,10 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
         });
       }
 
+      if (!trackAgentCommand(nodeId)) {
+        ctx.logGateway.warn(`dropping agent.request for node=${nodeId}: concurrency limit reached`);
+        return;
+      }
       void agentCommand(
         {
           message,
@@ -147,9 +182,13 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
         },
         defaultRuntime,
         ctx.deps,
-      ).catch((err) => {
-        ctx.logGateway.warn(`agent failed node=${nodeId}: ${formatForLog(err)}`);
-      });
+      )
+        .catch((err) => {
+          ctx.logGateway.warn(`agent failed node=${nodeId}: ${formatForLog(err)}`);
+        })
+        .finally(() => {
+          releaseAgentCommand(nodeId);
+        });
       return;
     }
     case "chat.subscribe": {

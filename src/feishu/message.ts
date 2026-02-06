@@ -15,6 +15,7 @@ import {
   type ResolvedFeishuConfig,
 } from "./config.js";
 import { resolveFeishuMedia, type FeishuMediaRef } from "./download.js";
+import { feishuPostToText } from "./format.js";
 import { readFeishuAllowFromStore, upsertFeishuPairingRequest } from "./pairing-store.js";
 import { sendMessageFeishu } from "./send.js";
 import { FeishuStreamingSession } from "./streaming-card.js";
@@ -54,7 +55,7 @@ type FeishuEventPayload = {
 };
 
 // Supported message types for processing
-const SUPPORTED_MSG_TYPES = new Set(["text", "image", "file", "audio", "media", "sticker"]);
+const SUPPORTED_MSG_TYPES = new Set(["text", "post", "image", "file", "audio", "media", "sticker"]);
 
 export type ProcessFeishuMessageOptions = {
   cfg?: OpenClawConfig;
@@ -228,7 +229,7 @@ export async function processFeishuMessage(
     }
   }
 
-  // Extract text content (for text messages or captions)
+  // Extract text content (for text or post messages)
   let text = "";
   if (msgType === "text") {
     try {
@@ -238,6 +239,15 @@ export async function processFeishuMessage(
       }
     } catch (err) {
       logger.error(`Failed to parse text message content: ${formatErrorMessage(err)}`);
+    }
+  } else if (msgType === "post") {
+    try {
+      if (message.content) {
+        const content = JSON.parse(message.content);
+        text = feishuPostToText(content);
+      }
+    } catch (err) {
+      logger.error(`Failed to parse post message content: ${formatErrorMessage(err)}`);
     }
   }
 

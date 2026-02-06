@@ -544,6 +544,41 @@ export const OpenClawSchema = z
       })
       .strict()
       .optional(),
+    outbound: z
+      .object({
+        enabled: z.boolean().optional(),
+        dedup: z
+          .object({
+            ttlMs: z.number().int().nonnegative().optional(),
+            maxSize: z.number().int().nonnegative().optional(),
+          })
+          .strict()
+          .optional(),
+        rateLimits: z
+          .object({
+            telegram: z.number().positive().optional(),
+            discord: z.number().positive().optional(),
+            slack: z.number().positive().optional(),
+            signal: z.number().positive().optional(),
+            whatsapp: z.number().positive().optional(),
+            line: z.number().positive().optional(),
+            feishu: z.number().positive().optional(),
+            imessage: z.number().positive().optional(),
+          })
+          .strict()
+          .optional(),
+        retry: z
+          .object({
+            attempts: z.number().int().positive().optional(),
+            minDelayMs: z.number().int().nonnegative().optional(),
+            maxDelayMs: z.number().int().nonnegative().optional(),
+            jitter: z.number().min(0).max(1).optional(),
+          })
+          .strict()
+          .optional(),
+      })
+      .strict()
+      .optional(),
     plugins: z
       .object({
         enabled: z.boolean().optional(),

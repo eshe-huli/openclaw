@@ -120,9 +120,13 @@ export function createGatewayCloseHandler(params: {
       if (typeof httpServer.closeIdleConnections === "function") {
         httpServer.closeIdleConnections();
       }
-      await new Promise<void>((resolve, reject) =>
-        httpServer.close((err) => (err ? reject(err) : resolve())),
-      );
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => resolve(), 30_000);
+        httpServer.close((err) => {
+          clearTimeout(timer);
+          err ? reject(err) : resolve();
+        });
+      });
     }
   };
 }

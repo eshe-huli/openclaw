@@ -48,6 +48,10 @@ import { resolveSandboxContext } from "../../sandbox.js";
 import { resolveSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
 import { repairSessionFileIfNeeded } from "../../session-file-repair.js";
 import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
+import {
+  sanitizeToolCallInputs,
+  sanitizeToolUseResultPairing,
+} from "../../session-transcript-repair.js";
 import { acquireSessionWriteLock } from "../../session-write-lock.js";
 import {
   applySkillEnvOverrides,
@@ -69,7 +73,6 @@ import {
   sanitizeToolsForGoogle,
 } from "../google.js";
 import { getDmHistoryLimitFromSessionKey, limitHistoryTurns } from "../history.js";
-import { sanitizeToolCallInputs, sanitizeToolUseResultPairing } from "../../session-transcript-repair.js";
 import { log } from "../logger.js";
 import { buildModelAliasLines } from "../model.js";
 import {
@@ -140,7 +143,7 @@ export function injectHistoryImagesIntoMessages(
 export async function runEmbeddedAttempt(
   params: EmbeddedRunAttemptParams,
 ): Promise<EmbeddedRunAttemptResult> {
-  const resolvedWorkspace = resolveUserPath(params.workspaceDir);
+  const resolvedWorkspace = resolveUserPath(params.workspaceDir || process.cwd());
   const prevCwd = process.cwd();
   const runAbortController = new AbortController();
 

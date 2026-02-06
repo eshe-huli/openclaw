@@ -4,11 +4,14 @@ import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { computeBackoff, sleepWithAbort } from "../infra/backoff.js";
 import { type SignalSseEvent, streamSignalEvents } from "./client.js";
 
-const DEFAULT_RECONNECT_POLICY: BackoffPolicy = {
+type SignalReconnectPolicy = BackoffPolicy & { maxAttempts: number };
+
+const DEFAULT_RECONNECT_POLICY: SignalReconnectPolicy = {
   initialMs: 1_000,
   maxMs: 10_000,
   factor: 2,
   jitter: 0.2,
+  maxAttempts: 0,
 };
 
 type RunSignalSseLoopParams = {
@@ -17,7 +20,7 @@ type RunSignalSseLoopParams = {
   abortSignal?: AbortSignal;
   runtime: RuntimeEnv;
   onEvent: (event: SignalSseEvent) => void;
-  policy?: Partial<BackoffPolicy>;
+  policy?: Partial<SignalReconnectPolicy>;
 };
 
 export async function runSignalSseLoop({
@@ -56,6 +59,10 @@ export async function runSignalSseLoop({
         return;
       }
       reconnectAttempts += 1;
+      if (reconnectPolicy.maxAttempts > 0 && reconnectAttempts >= reconnectPolicy.maxAttempts) {
+        runtime.error?.(`Signal SSE reconnect limit reached (${reconnectPolicy.maxAttempts})`);
+        return;
+      }
       const delayMs = computeBackoff(reconnectPolicy, reconnectAttempts);
       logReconnectVerbose(`Signal SSE stream ended, reconnecting in ${delayMs / 1000}s...`);
       await sleepWithAbort(delayMs, abortSignal);
@@ -65,6 +72,10 @@ export async function runSignalSseLoop({
       }
       runtime.error?.(`Signal SSE stream error: ${String(err)}`);
       reconnectAttempts += 1;
+      if (reconnectPolicy.maxAttempts > 0 && reconnectAttempts >= reconnectPolicy.maxAttempts) {
+        runtime.error?.(`Signal SSE reconnect limit reached (${reconnectPolicy.maxAttempts})`);
+        return;
+      }
       const delayMs = computeBackoff(reconnectPolicy, reconnectAttempts);
       runtime.log?.(`Signal SSE connection lost, reconnecting in ${delayMs / 1000}s...`);
       try {

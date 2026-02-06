@@ -47,12 +47,18 @@ export async function deliverDiscordReply(params: {
         if (!trimmed) {
           continue;
         }
-        await sendMessageDiscord(params.target, trimmed, {
-          token: params.token,
-          rest: params.rest,
-          accountId: params.accountId,
-          replyTo: isFirstChunk ? replyTo : undefined,
-        });
+        try {
+          await sendMessageDiscord(params.target, trimmed, {
+            token: params.token,
+            rest: params.rest,
+            accountId: params.accountId,
+            replyTo: isFirstChunk ? replyTo : undefined,
+          });
+        } catch (err) {
+          params.runtime.error?.(
+            `discord chunk send failed: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
         isFirstChunk = false;
       }
       continue;

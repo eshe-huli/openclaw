@@ -33,6 +33,46 @@ export type FeishuPostContent = {
   };
 };
 
+/**
+ * Extract plain text from an incoming Feishu post (rich-text) message.
+ * Handles both zh_cn and en_us locales, preferring zh_cn.
+ */
+export function feishuPostToText(raw: unknown): string {
+  if (!raw || typeof raw !== "object") {
+    return "";
+  }
+  const post = raw as Record<string, unknown>;
+  // Try locale keys in priority order
+  const locale =
+    (post.zh_cn as { title?: string; content?: unknown[][] } | undefined) ??
+    (post.en_us as { title?: string; content?: unknown[][] } | undefined);
+  if (!locale || !Array.isArray(locale.content)) {
+    return "";
+  }
+  const lines: string[] = [];
+  if (locale.title?.trim()) {
+    lines.push(locale.title.trim());
+  }
+  for (const line of locale.content) {
+    if (!Array.isArray(line)) continue;
+    const parts: string[] = [];
+    for (const el of line) {
+      if (!el || typeof el !== "object") continue;
+      const element = el as Record<string, unknown>;
+      if (element.tag === "text" && typeof element.text === "string") {
+        parts.push(element.text);
+      } else if (element.tag === "a" && typeof element.text === "string") {
+        parts.push(element.text);
+      } else if (element.tag === "emotion" && typeof element.emoji_type === "string") {
+        parts.push(`[${element.emoji_type}]`);
+      }
+      // Skip img, media, at tags - not representable as plain text
+    }
+    lines.push(parts.join(""));
+  }
+  return lines.join("\n").trim();
+}
+
 export type FeishuFormattedChunk = {
   post: FeishuPostContent;
   text: string;

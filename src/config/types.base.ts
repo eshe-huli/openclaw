@@ -19,6 +19,13 @@ export type OutboundRetryConfig = {
   jitter?: number;
 };
 
+export type OutboundMiddlewareConfig = {
+  enabled?: boolean;
+  dedup?: { ttlMs?: number; maxSize?: number };
+  rateLimits?: Partial<Record<string, number>>;
+  retry?: OutboundRetryConfig;
+};
+
 export type BlockStreamingCoalesceConfig = {
   minChars?: number;
   maxChars?: number;

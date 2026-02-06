@@ -257,15 +257,12 @@ export async function sendMessageFeishu(
         return textRes.data ?? null;
       }
     } catch (err) {
-      const errMsg = formatErrorMessage(err);
-      const errStack = err instanceof Error ? err.stack : undefined;
-      logger.error(`Feishu media upload/send error: ${errMsg}`);
-      if (errStack) {
-        logger.error(`Stack: ${errStack}`);
+      logger.error(`Feishu media upload/send error: ${formatErrorMessage(err)}`);
+      if (!contentText?.trim()) {
+        throw new Error(`Feishu media upload failed`, { cause: err });
       }
-      // Re-throw the error instead of falling back to text
-      // This makes debugging easier and prevents silent failures
-      throw new Error(`Feishu media upload failed: ${errMsg}`, { cause: err });
+      logger.warn(`Falling back to text-only delivery after media failure`);
+      // Fall through to text send code below
     }
   }
 

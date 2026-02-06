@@ -190,7 +190,10 @@ export async function sendMessageSlack(
       lastMessageId = response.ts ?? lastMessageId;
     }
   } else {
-    for (const chunk of chunks.length ? chunks : [""]) {
+    if (!chunks.length) {
+      return { messageId: "empty", channelId };
+    }
+    for (const chunk of chunks) {
       const response = await client.chat.postMessage({
         channel: channelId,
         text: chunk,

@@ -1,6 +1,6 @@
 import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
 import { randomUUID } from "node:crypto";
-import fs from "node:fs";
+import fs from "node:fs/promises";
 import path from "node:path";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
@@ -62,15 +62,21 @@ function resolveTranscriptPath(params: {
   return path.join(path.dirname(storePath), `${sessionId}.jsonl`);
 }
 
-function ensureTranscriptFile(params: { transcriptPath: string; sessionId: string }): {
+async function ensureTranscriptFile(params: {
+  transcriptPath: string;
+  sessionId: string;
+}): Promise<{
   ok: boolean;
   error?: string;
-} {
-  if (fs.existsSync(params.transcriptPath)) {
+}> {
+  try {
+    await fs.access(params.transcriptPath);
     return { ok: true };
+  } catch {
+    // File doesn't exist, create it
   }
   try {
-    fs.mkdirSync(path.dirname(params.transcriptPath), { recursive: true });
+    await fs.mkdir(path.dirname(params.transcriptPath), { recursive: true });
     const header = {
       type: "session",
       version: CURRENT_SESSION_VERSION,
@@ -78,21 +84,21 @@ function ensureTranscriptFile(params: { transcriptPath: string; sessionId: strin
       timestamp: new Date().toISOString(),
       cwd: process.cwd(),
     };
-    fs.writeFileSync(params.transcriptPath, `${JSON.stringify(header)}\n`, "utf-8");
+    await fs.writeFile(params.transcriptPath, `${JSON.stringify(header)}\n`, "utf-8");
     return { ok: true };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }
 }
 
-function appendAssistantTranscriptMessage(params: {
+async function appendAssistantTranscriptMessage(params: {
   message: string;
   label?: string;
   sessionId: string;
   storePath: string | undefined;
   sessionFile?: string;
   createIfMissing?: boolean;
-}): TranscriptAppendResult {
+}): Promise<TranscriptAppendResult> {
   const transcriptPath = resolveTranscriptPath({
     sessionId: params.sessionId,
     storePath: params.storePath,
@@ -102,11 +108,18 @@ function appendAssistantTranscriptMessage(params: {
     return { ok: false, error: "transcript path not resolved" };
   }
 
-  if (!fs.existsSync(transcriptPath)) {
+  let fileExists: boolean;
+  try {
+    await fs.access(transcriptPath);
+    fileExists = true;
+  } catch {
+    fileExists = false;
+  }
+  if (!fileExists) {
     if (!params.createIfMissing) {
       return { ok: false, error: "transcript file not found" };
     }
-    const ensured = ensureTranscriptFile({
+    const ensured = await ensureTranscriptFile({
       transcriptPath,
       sessionId: params.sessionId,
     });
@@ -133,7 +146,7 @@ function appendAssistantTranscriptMessage(params: {
   };
 
   try {
-    fs.appendFileSync(transcriptPath, `${JSON.stringify(transcriptEntry)}\n`, "utf-8");
+    await fs.appendFile(transcriptPath, `${JSON.stringify(transcriptEntry)}\n`, "utf-8");
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }
@@ -523,7 +536,7 @@ export const chatHandlers: GatewayRequestHandlers = {
           onModelSelected,
         },
       })
-        .then(() => {
+        .then(async () => {
           if (!agentRunStarted) {
             const combinedReply = finalReplyParts
               .map((part) => part.trim())
@@ -536,7 +549,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                 p.sessionKey,
               );
               const sessionId = latestEntry?.sessionId ?? entry?.sessionId ?? clientRunId;
-              const appended = appendAssistantTranscriptMessage({
+              const appended = await appendAssistantTranscriptMessage({
                 message: combinedReply,
                 sessionId,
                 storePath: latestStorePath,
@@ -644,7 +657,15 @@ export const chatHandlers: GatewayRequestHandlers = {
       ? entry.sessionFile
       : path.join(path.dirname(storePath), `${sessionId}.jsonl`);
 
-    if (!fs.existsSync(transcriptPath)) {
+    let transcriptExists: boolean;
+    try {
+      await fs.access(transcriptPath);
+      transcriptExists = true;
+    } catch {
+      transcriptExists = false;
+    }
+
+    if (!transcriptExists) {
       respond(
         false,
         undefined,
@@ -673,7 +694,7 @@ export const chatHandlers: GatewayRequestHandlers = {
 
     // Append to transcript file
     try {
-      fs.appendFileSync(transcriptPath, `${JSON.stringify(transcriptEntry)}\n`, "utf-8");
+      await fs.appendFile(transcriptPath, `${JSON.stringify(transcriptEntry)}\n`, "utf-8");
     } catch (err) {
       const errMessage = err instanceof Error ? err.message : String(err);
       respond(
