@@ -1,0 +1,36 @@
+{
+  "id": "ringforge",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": {
+        "type": "boolean",
+        "default": false,
+        "description": "Enable Ringforge mesh connection"
+      },
+      "server": {
+        "type": "string",
+        "description": "Ringforge hub WebSocket URL (e.g. wss://mesh.example.com)"
+      },
+      "apiKey": {
+        "type": "string",
+        "description": "Live API key (rf_live_...)"
+      },
+      "fleetId": {
+        "type": "string",
+        "description": "Fleet ID to join"
+      },
+      "agentName": {
+        "type": "string",
+        "description": "Agent display name in the mesh"
+      },
+      "capabilities": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "Agent capabilities (e.g. ['code', 'research'])"
+      }
+    },
+    "required": ["server", "apiKey", "fleetId"]
+  }
+}
