@@ -50,6 +50,37 @@ function resolveConfig(
   };
 }
 
+function formatDmAsSystemEvent(
+  from: { name?: string; agent_id: string },
+  message: Record<string, unknown>,
+): string {
+  const fromName = from.name || from.agent_id;
+  const type = (message.type as string) || "text";
+
+  switch (type) {
+    case "text":
+      return `[Ringforge DM] ${fromName}: ${message.text}`;
+
+    case "task_request":
+      return `[Ringforge Task] ${fromName} assigned task "${message.task}": ${message.description || ""}${message.priority === "high" ? " ⚡ HIGH PRIORITY" : ""}`;
+
+    case "query":
+      return `[Ringforge Query] ${fromName} asks: ${message.question}`;
+
+    case "status_request":
+      return `[Ringforge] ${fromName} requests your status. Reply using ringforge_send.`;
+
+    case "data":
+      return `[Ringforge Data] ${fromName} sent data "${message.label}": ${JSON.stringify(message.payload).slice(0, 500)}`;
+
+    case "task_result":
+      return `[Ringforge Result] ${fromName} completed task (ref=${message.ref}): ${JSON.stringify(message.result).slice(0, 500)}`;
+
+    default:
+      return `[Ringforge DM] ${fromName} [${type}]: ${JSON.stringify(message).slice(0, 500)}`;
+  }
+}
+
 const ringforgePlugin = {
   id: "ringforge",
   name: "Ringforge",
@@ -101,10 +132,25 @@ const ringforgePlugin = {
         api.logger.info(`Ringforge: disconnected (${reason}), reconnecting...`);
       },
       onDirectMessage: (from, message) => {
-        api.logger.info(
-          `Ringforge DM from ${from.name || from.agent_id}: ${message.type === "text" ? (message.text as string) : JSON.stringify(message).slice(0, 100)}`,
-        );
+        const fromName = from.name || from.agent_id;
+        const preview =
+          message.type === "text"
+            ? (message.text as string)
+            : JSON.stringify(message).slice(0, 100);
+        api.logger.info(`Ringforge DM from ${fromName}: ${preview}`);
         pushIncomingMessage(from, message);
+
+        // DM → Agent Turn Injection: inject as system event so the LLM processes it
+        const injection = (message as Record<string, unknown>).injection || "queue";
+        const priority = (message as Record<string, unknown>).priority || "normal";
+
+        if (injection === "immediate" || priority === "high") {
+          // Immediate injection — trigger agent turn
+          const eventText = formatDmAsSystemEvent(from, message);
+          api.runtime.system.enqueueSystemEvent(eventText, {});
+          api.logger.info(`Ringforge: injected DM from ${fromName} as system event (immediate)`);
+        }
+        // "queue" mode: message stays in inbox, agent checks via ringforge_inbox tool
       },
       onRoster: (agents) => {
         updateRoster(agents);
