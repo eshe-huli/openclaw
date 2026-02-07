@@ -2,7 +2,7 @@
  * Ringforge WebSocket client — Phoenix Channel protocol v2
  *
  * Connects to a Ringforge hub, joins a fleet channel, handles presence,
- * messaging, and auto-reconnect.
+ * messaging, memory, and auto-reconnect.
  */
 
 import WebSocket from "ws";
@@ -40,6 +40,12 @@ export type RingforgeEventHandler = {
   onRoster?: (agents: RingforgeAgent[]) => void;
 };
 
+type PendingReply = {
+  resolve: (payload: Record<string, unknown>) => void;
+  reject: (err: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
+};
+
 export class RingforgeClient {
   private ws: WebSocket | null = null;
   private config: RingforgeConfig;
@@ -52,6 +58,7 @@ export class RingforgeClient {
   private stopped = false;
   private agentId: string | null = null;
   private connectedAt: number | null = null;
+  private pendingReplies = new Map<string, PendingReply>();
 
   constructor(config: RingforgeConfig, handlers: RingforgeEventHandler = {}) {
     this.config = config;
@@ -76,6 +83,25 @@ export class RingforgeClient {
     return ref;
   }
 
+  /**
+   * Push a channel event and wait for the phx_reply.
+   * Returns the reply response payload. Rejects on error or timeout.
+   */
+  private pushChannelAsync(
+    event: string,
+    payload: Record<string, unknown> = {},
+    timeoutMs = 10_000,
+  ): Promise<Record<string, unknown>> {
+    return new Promise((resolve, reject) => {
+      const ref = this.pushChannel(event, payload);
+      const timer = setTimeout(() => {
+        this.pendingReplies.delete(ref);
+        reject(new Error(`Timeout waiting for reply to ${event}`));
+      }, timeoutMs);
+      this.pendingReplies.set(ref, { resolve, reject, timer });
+    });
+  }
+
   connect(): void {
     this.stopped = false;
     const agentInfo = JSON.stringify({
@@ -84,7 +110,7 @@ export class RingforgeClient {
       capabilities: this.config.capabilities || [],
     });
 
-    const wsUrl = `${this.config.server}/ws/websocket?vsn=2.0.0&api_key=${encodeURIComponent(this.config.apiKey)}&agent=${encodeURIComponent(agentInfo)}`;
+    const wsUrl = `${this.config.server}?vsn=2.0.0&api_key=${encodeURIComponent(this.config.apiKey)}&agent=${encodeURIComponent(agentInfo)}`;
 
     this.ws = new WebSocket(wsUrl);
 
@@ -103,8 +129,8 @@ export class RingforgeClient {
     this.ws.on("message", (data: WebSocket.Data) => {
       try {
         const msg = JSON.parse(data.toString());
-        const [_jRef, _ref, topic, event, payload] = msg;
-        this.handleMessage(topic, event, payload);
+        const [_jRef, ref, topic, event, payload] = msg;
+        this.handleMessage(topic, event, payload, ref);
       } catch {
         // ignore malformed messages
       }
@@ -136,6 +162,12 @@ export class RingforgeClient {
       clearInterval(this.heartbeatInterval);
       this.heartbeatInterval = null;
     }
+    // Reject all pending replies
+    for (const [ref, pending] of this.pendingReplies) {
+      clearTimeout(pending.timer);
+      pending.reject(new Error("Connection closed"));
+      this.pendingReplies.delete(ref);
+    }
   }
 
   private scheduleReconnect(): void {
@@ -165,11 +197,34 @@ export class RingforgeClient {
     ]);
   }
 
-  private handleMessage(topic: string, event: string, payload: Record<string, unknown>): void {
+  private handleMessage(
+    topic: string,
+    event: string,
+    payload: Record<string, unknown>,
+    ref?: string,
+  ): void {
     const p = (payload?.payload as Record<string, unknown>) || payload;
 
     switch (event) {
       case "phx_reply": {
+        // Resolve pending async replies
+        if (ref && this.pendingReplies.has(ref)) {
+          const pending = this.pendingReplies.get(ref)!;
+          this.pendingReplies.delete(ref);
+          clearTimeout(pending.timer);
+          const status = (payload as Record<string, unknown>)?.status;
+          if (status === "ok") {
+            const response = (payload as Record<string, unknown>)?.response;
+            pending.resolve((response as Record<string, unknown>) || {});
+          } else {
+            const response = (payload as Record<string, unknown>)?.response;
+            pending.reject(
+              new Error(`Reply error: ${JSON.stringify(response || payload).slice(0, 200)}`),
+            );
+          }
+          return;
+        }
+
         const status = (payload as Record<string, unknown>)?.status;
         if (status === "error") {
           const resp = (payload as Record<string, unknown>)?.response as Record<string, unknown>;
@@ -259,8 +314,11 @@ export class RingforgeClient {
     this.pushChannel("memory:set", { payload: { key, value } });
   }
 
-  getMemory(key: string): void {
-    this.pushChannel("memory:get", { payload: { key } });
+  /**
+   * Get a memory value. Returns the reply payload with the value.
+   */
+  async getMemoryAsync(key: string): Promise<Record<string, unknown>> {
+    return this.pushChannelAsync("memory:get", { payload: { key } });
   }
 
   get isConnected(): boolean {

@@ -1,17 +1,20 @@
 {
   "id": "ringforge",
+  "name": "Ringforge",
+  "description": "Connect OpenClaw agents to a Ringforge agent mesh fleet",
+  "version": "0.1.0",
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
     "properties": {
       "enabled": {
         "type": "boolean",
-        "default": false,
+        "default": true,
         "description": "Enable Ringforge mesh connection"
       },
       "server": {
         "type": "string",
-        "description": "Ringforge hub WebSocket URL (e.g. wss://mesh.example.com)"
+        "description": "Ringforge hub WebSocket URL (e.g. wss://ringforge.wejoona.com)"
       },
       "apiKey": {
         "type": "string",
@@ -19,6 +22,7 @@
       },
       "fleetId": {
         "type": "string",
+        "default": "default",
         "description": "Fleet ID to join"
       },
       "agentName": {
@@ -31,6 +35,14 @@
         "description": "Agent capabilities (e.g. ['code', 'research'])"
       }
     },
-    "required": ["server", "apiKey", "fleetId"]
+    "required": ["server", "apiKey"]
+  },
+  "uiHints": {
+    "enabled": { "label": "Enabled", "help": "Enable Ringforge mesh connection" },
+    "server": { "label": "Server URL", "placeholder": "wss://ringforge.wejoona.com" },
+    "apiKey": { "label": "API Key", "sensitive": true, "placeholder": "rf_live_..." },
+    "fleetId": { "label": "Fleet ID" },
+    "agentName": { "label": "Agent Name", "help": "Display name in the mesh" },
+    "capabilities": { "label": "Capabilities", "help": "Comma-separated list" }
   }
 }

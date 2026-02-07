@@ -3,13 +3,16 @@
  *
  * Connects any OpenClaw agent to a Ringforge fleet with just config:
  *
- *   ringforge:
- *     enabled: true
- *     server: "wss://mesh.example.com"
- *     apiKey: "rf_live_..."
- *     fleetId: "..."
- *     agentName: "My Agent"
- *     capabilities: ["code", "research"]
+ *   plugins:
+ *     entries:
+ *       ringforge:
+ *         enabled: true
+ *         config:
+ *           server: "wss://ringforge.wejoona.com"
+ *           apiKey: "rf_live_..."
+ *           fleetId: "default"
+ *           agentName: "My Agent"
+ *           capabilities: ["code", "research"]
  *
  * The plugin:
  * - Starts a persistent WebSocket connection to the hub on gateway_start
@@ -33,9 +36,9 @@ function resolveConfig(
 
   const server = pluginConfig.server as string;
   const apiKey = pluginConfig.apiKey as string;
-  const fleetId = pluginConfig.fleetId as string;
+  const fleetId = (pluginConfig.fleetId as string) || "default";
 
-  if (!server || !apiKey || !fleetId) return null;
+  if (!server || !apiKey) return null;
 
   return {
     server,
@@ -96,7 +99,7 @@ const ringforgePlugin = {
       enabled: { label: "Enabled", help: "Enable Ringforge mesh connection" },
       server: {
         label: "Server URL",
-        placeholder: "wss://mesh.example.com",
+        placeholder: "wss://ringforge.wejoona.com",
       },
       apiKey: {
         label: "API Key",
@@ -119,7 +122,7 @@ const ringforgePlugin = {
     const config = resolveConfig(api.pluginConfig, api.config?.identity?.agentName || api.name);
 
     if (!config) {
-      api.logger.info("Ringforge: disabled or missing config (need server, apiKey, fleetId)");
+      api.logger.info("Ringforge: disabled or missing config (need server, apiKey)");
       return;
     }
 
@@ -147,7 +150,9 @@ const ringforgePlugin = {
         if (injection === "immediate" || priority === "high") {
           // Immediate injection — trigger agent turn
           const eventText = formatDmAsSystemEvent(from, message);
-          api.runtime.system.enqueueSystemEvent(eventText, {});
+          // Use agent:main:main as default session key for the primary agent
+          const sessionKey = "agent:main:main";
+          api.runtime.system.enqueueSystemEvent(eventText, { sessionKey });
           api.logger.info(`Ringforge: injected DM from ${fromName} as system event (immediate)`);
         }
         // "queue" mode: message stays in inbox, agent checks via ringforge_inbox tool

@@ -1,10 +1,15 @@
 /**
- * Ringforge agent tools — exposed to the LLM so it can interact with the mesh
+ * Ringforge agent tools — exposed to the LLM so it can interact with the mesh.
+ *
+ * Each tool conforms to the AgentTool interface from pi-agent-core:
+ *   { name, label, description, parameters, execute(toolCallId, params, signal?) }
+ *   execute returns { content: [{ type: "text", text: "..." }], details: ... }
  */
 
 import type { RingforgeClient, RingforgeAgent, RingforgeMessage } from "./client.js";
 
-type ToolResult = { content: string };
+type ToolContent = { type: "text"; text: string };
+type ToolResult = { content: ToolContent[]; details: unknown };
 
 // Store roster state for tool queries
 let lastRoster: RingforgeAgent[] = [];
@@ -32,10 +37,18 @@ export function pushIncomingMessage(from: RingforgeAgent, message: RingforgeMess
   }
 }
 
+function textResult(text: string): ToolResult {
+  return {
+    content: [{ type: "text", text }],
+    details: { text },
+  };
+}
+
 export function createRingforgeTools(client: RingforgeClient) {
   return [
     {
       name: "ringforge_roster",
+      label: "Ringforge Roster",
       description:
         "List agents currently online in the Ringforge fleet. Returns agent IDs, names, states, and capabilities.",
       parameters: {
@@ -43,25 +56,28 @@ export function createRingforgeTools(client: RingforgeClient) {
         properties: {},
         required: [] as string[],
       },
-      execute: async (): Promise<ToolResult> => {
+      execute: async (
+        _toolCallId: string,
+        _params: Record<string, unknown>,
+      ): Promise<ToolResult> => {
         client.requestRoster();
         // Return cached roster (updated async via handler)
         if (lastRoster.length === 0) {
-          return {
-            content:
-              "No agents in roster yet. The fleet may be empty or roster hasn't been received.",
-          };
+          return textResult(
+            "No agents in roster yet. The fleet may be empty or roster hasn't been received.",
+          );
         }
         const lines = lastRoster.map(
           (a) =>
             `- ${a.name || a.agent_id} (${a.agent_id}) — state: ${a.state}${a.task ? `, task: ${a.task}` : ""}, capabilities: [${(a.capabilities || []).join(", ")}]`,
         );
-        return { content: `Fleet roster (${lastRoster.length} agents):\n${lines.join("\n")}` };
+        return textResult(`Fleet roster (${lastRoster.length} agents):\n${lines.join("\n")}`);
       },
     },
 
     {
       name: "ringforge_send",
+      label: "Ringforge Send",
       description:
         "Send a direct message to another agent in the Ringforge mesh. Supports text messages and structured payloads (task_request, query, data, status_request).",
       parameters: {
@@ -79,9 +95,12 @@ export function createRingforgeTools(client: RingforgeClient) {
         },
         required: ["agent_id", "message"],
       },
-      execute: async (params: { agent_id: string; message: string }): Promise<ToolResult> => {
+      execute: async (
+        _toolCallId: string,
+        params: { agent_id: string; message: string },
+      ): Promise<ToolResult> => {
         if (!client.isConnected) {
-          return { content: "Not connected to Ringforge mesh." };
+          return textResult("Not connected to Ringforge mesh.");
         }
 
         let msg: RingforgeMessage;
@@ -93,14 +112,15 @@ export function createRingforgeTools(client: RingforgeClient) {
         }
 
         client.sendDM(params.agent_id, msg);
-        return {
-          content: `Message sent to ${params.agent_id}: ${JSON.stringify(msg).slice(0, 200)}`,
-        };
+        return textResult(
+          `Message sent to ${params.agent_id}: ${JSON.stringify(msg).slice(0, 200)}`,
+        );
       },
     },
 
     {
       name: "ringforge_inbox",
+      label: "Ringforge Inbox",
       description:
         "Check incoming messages from other agents in the Ringforge mesh. Returns unread messages and clears the inbox.",
       parameters: {
@@ -113,12 +133,12 @@ export function createRingforgeTools(client: RingforgeClient) {
         },
         required: [] as string[],
       },
-      execute: async (params: { limit?: number }): Promise<ToolResult> => {
+      execute: async (_toolCallId: string, params: { limit?: number }): Promise<ToolResult> => {
         const limit = params.limit || 10;
         const messages = pendingMessages.splice(0, limit);
 
         if (messages.length === 0) {
-          return { content: "No new messages in Ringforge inbox." };
+          return textResult("No new messages in Ringforge inbox.");
         }
 
         const lines = messages.map((m) => {
@@ -128,14 +148,15 @@ export function createRingforgeTools(client: RingforgeClient) {
           return `[${age}s ago] ${m.fromName}: ${body}`;
         });
 
-        return {
-          content: `${messages.length} message(s) from Ringforge:\n${lines.join("\n")}${pendingMessages.length > 0 ? `\n(${pendingMessages.length} more in queue)` : ""}`,
-        };
+        return textResult(
+          `${messages.length} message(s) from Ringforge:\n${lines.join("\n")}${pendingMessages.length > 0 ? `\n(${pendingMessages.length} more in queue)` : ""}`,
+        );
       },
     },
 
     {
       name: "ringforge_activity",
+      label: "Ringforge Activity",
       description:
         "Broadcast an activity event to the entire fleet (visible to all agents and dashboard).",
       parameters: {
@@ -158,21 +179,21 @@ export function createRingforgeTools(client: RingforgeClient) {
         },
         required: ["kind", "description"],
       },
-      execute: async (params: {
-        kind: string;
-        description: string;
-        tags?: string[];
-      }): Promise<ToolResult> => {
+      execute: async (
+        _toolCallId: string,
+        params: { kind: string; description: string; tags?: string[] },
+      ): Promise<ToolResult> => {
         if (!client.isConnected) {
-          return { content: "Not connected to Ringforge mesh." };
+          return textResult("Not connected to Ringforge mesh.");
         }
         client.broadcastActivity(params.kind, params.description, params.tags || []);
-        return { content: `Activity broadcast: [${params.kind}] ${params.description}` };
+        return textResult(`Activity broadcast: [${params.kind}] ${params.description}`);
       },
     },
 
     {
       name: "ringforge_presence",
+      label: "Ringforge Presence",
       description:
         "Update your presence state in the mesh (online, busy, away) with optional task description.",
       parameters: {
@@ -189,19 +210,23 @@ export function createRingforgeTools(client: RingforgeClient) {
         },
         required: ["state"],
       },
-      execute: async (params: { state: string; task?: string }): Promise<ToolResult> => {
+      execute: async (
+        _toolCallId: string,
+        params: { state: string; task?: string },
+      ): Promise<ToolResult> => {
         if (!client.isConnected) {
-          return { content: "Not connected to Ringforge mesh." };
+          return textResult("Not connected to Ringforge mesh.");
         }
         client.updatePresence(params.state, params.task);
-        return {
-          content: `Presence updated: ${params.state}${params.task ? ` (${params.task})` : ""}`,
-        };
+        return textResult(
+          `Presence updated: ${params.state}${params.task ? ` (${params.task})` : ""}`,
+        );
       },
     },
 
     {
       name: "ringforge_memory",
+      label: "Ringforge Memory",
       description: "Read or write shared fleet memory (key-value store accessible by all agents).",
       parameters: {
         type: "object" as const,
@@ -221,22 +246,28 @@ export function createRingforgeTools(client: RingforgeClient) {
         },
         required: ["action", "key"],
       },
-      execute: async (params: {
-        action: string;
-        key: string;
-        value?: string;
-      }): Promise<ToolResult> => {
+      execute: async (
+        _toolCallId: string,
+        params: { action: string; key: string; value?: string },
+      ): Promise<ToolResult> => {
         if (!client.isConnected) {
-          return { content: "Not connected to Ringforge mesh." };
+          return textResult("Not connected to Ringforge mesh.");
         }
         if (params.action === "set") {
           client.setMemory(params.key, params.value || "");
-          return { content: `Memory set: ${params.key}` };
+          return textResult(`Memory set: ${params.key}`);
         } else if (params.action === "get") {
-          client.getMemory(params.key);
-          return { content: `Memory get requested for: ${params.key} (result will arrive async)` };
+          try {
+            const reply = await client.getMemoryAsync(params.key);
+            const value = reply?.value ?? reply?.result ?? reply;
+            return textResult(`Memory[${params.key}]: ${JSON.stringify(value).slice(0, 1000)}`);
+          } catch (err) {
+            return textResult(
+              `Memory get failed for "${params.key}": ${err instanceof Error ? err.message : String(err)}`,
+            );
+          }
         }
-        return { content: `Unknown action: ${params.action}. Use 'set' or 'get'.` };
+        return textResult(`Unknown action: ${params.action}. Use 'set' or 'get'.`);
       },
     },
   ];
