@@ -217,7 +217,7 @@ export function createRingforgeTools(client: RingforgeClient) {
         if (!client.isConnected) {
           return textResult("Not connected to Ringforge mesh.");
         }
-        client.updatePresence(params.state, params.task);
+        client.updatePresence({ state: params.state, task: params.task });
         return textResult(
           `Presence updated: ${params.state}${params.task ? ` (${params.task})` : ""}`,
         );

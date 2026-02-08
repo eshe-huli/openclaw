@@ -26,6 +26,7 @@ import { RingforgeClient, type RingforgeConfig } from "./src/client.js";
 import { createRingforgeTools, updateRoster, pushIncomingMessage } from "./src/tools.js";
 
 let client: RingforgeClient | null = null;
+let lastKnownModel: string | null = null;
 
 function resolveConfig(
   pluginConfig: Record<string, unknown> | undefined,
@@ -52,6 +53,34 @@ function resolveConfig(
     capabilities: (pluginConfig.capabilities as string[]) || [],
     model: (pluginConfig.model as string) || undefined,
   };
+}
+
+function resolveCurrentModel(api: OpenClawPluginApi): string | null {
+  try {
+    // Try multiple paths where model might be configured
+    const cfg = api.config as Record<string, unknown>;
+
+    // 1. Direct model field in agent config
+    if (typeof cfg.model === "string") return cfg.model;
+
+    // 2. Agent runtime model
+    const agentRuntime = cfg.agentRuntime as Record<string, unknown> | undefined;
+    if (agentRuntime?.model && typeof agentRuntime.model === "string") return agentRuntime.model;
+
+    // 3. Default model from models config
+    const models = cfg.models as Record<string, unknown> | undefined;
+    if (models?.default && typeof models.default === "string") return models.default;
+
+    // 4. Reload config and check
+    const freshConfig = api.runtime.config.loadConfig();
+    if (freshConfig && typeof (freshConfig as Record<string, unknown>).model === "string") {
+      return (freshConfig as Record<string, unknown>).model as string;
+    }
+
+    return null;
+  } catch {
+    return null;
+  }
 }
 
 function formatDmAsSystemEvent(
@@ -178,6 +207,30 @@ const ringforgePlugin = {
         const desc = activity.description || "";
         api.logger.info(`Ringforge activity: [${kind}] ${desc}`);
       },
+    });
+
+    // Detect current model from config
+    const currentModel = resolveCurrentModel(api);
+    if (currentModel) {
+      config.model = currentModel;
+      lastKnownModel = currentModel;
+      api.logger.info(`Ringforge: detected model: ${currentModel}`);
+    }
+
+    // Hook before_agent_start to detect model changes
+    api.on("before_agent_start", (_event, ctx) => {
+      const model = resolveCurrentModel(api);
+      if (model && model !== lastKnownModel) {
+        const oldModel = lastKnownModel;
+        lastKnownModel = model;
+        api.logger.info(`Ringforge: model changed ${oldModel} → ${model}`);
+
+        // Notify Hub of model change via presence update
+        if (client?.isConnected) {
+          client.updatePresence({ model, state: "busy" });
+          api.logger.info(`Ringforge: notified Hub of model change to ${model}`);
+        }
+      }
     });
 
     // Register tools

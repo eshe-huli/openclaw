@@ -302,10 +302,13 @@ export class RingforgeClient {
     });
   }
 
-  updatePresence(state: string, task?: string): void {
-    this.pushChannel("presence:update", {
-      payload: { state, task: task || null },
-    });
+  updatePresence(update: { state?: string; task?: string; model?: string; load?: number }): void {
+    const payload: Record<string, unknown> = {};
+    if (update.state) payload.state = update.state;
+    if (update.task !== undefined) payload.task = update.task;
+    if (update.model) payload.model = update.model;
+    if (update.load !== undefined) payload.load = update.load;
+    this.pushChannel("presence:update", { payload });
   }
 
   requestRoster(): void {
