@@ -71,6 +71,7 @@ const GROUP_LABELS: Record<string, string> = {
   discovery: "Discovery",
   presence: "Presence",
   voicewake: "Voice Wake",
+  sessionStore: "Session Store",
 };
 
 const GROUP_ORDER: Record<string, number> = {
@@ -98,6 +99,7 @@ const GROUP_ORDER: Record<string, number> = {
   discovery: 210,
   presence: 220,
   voicewake: 230,
+  sessionStore: 92,
   logging: 900,
 };
 
@@ -257,6 +259,7 @@ const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.memorySearch.cache.enabled": "Memory Search Embedding Cache",
   "agents.defaults.memorySearch.cache.maxEntries": "Memory Search Embedding Cache Max Entries",
   memory: "Memory",
+  sessionStore: "Session Store",
   "memory.backend": "Memory Backend",
   "memory.citations": "Memory Citations Mode",
   "memory.qmd.command": "QMD Binary",
@@ -277,6 +280,12 @@ const FIELD_LABELS: Record<string, string> = {
   "memory.qmd.limits.maxInjectedChars": "QMD Max Injected Chars",
   "memory.qmd.limits.timeoutMs": "QMD Search Timeout (ms)",
   "memory.qmd.scope": "QMD Surface Scope",
+  "sessionStore.store": "Session Store Backend",
+  "sessionStore.redis.url": "Session Store Redis URL",
+  "sessionStore.redis.prefix": "Session Store Redis Prefix",
+  "sessionStore.sqlite.path": "Session Store SQLite Path",
+  "sessionStore.maxEntries": "Session Max Entries",
+  "sessionStore.compactionTriggerBytes": "Session Compaction Trigger (bytes)",
   "auth.profiles": "Auth Profiles",
   "auth.order": "Auth Profile Order",
   "auth.cooldowns.billingBackoffHours": "Billing Backoff (hours)",
@@ -516,6 +525,16 @@ const FIELD_HELP: Record<string, string> = {
   "channels.mattermost.oncharPrefixes": 'Trigger prefixes for onchar mode (default: [">", "!"]).',
   "channels.mattermost.requireMention":
     "Require @mention in channels before responding (default: true).",
+  "sessionStore.store":
+    'Backend for durable session storage ("auto" tries redis → sqlite → jsonl).',
+  "sessionStore.redis.url": "Redis connection URL for session storage.",
+  "sessionStore.redis.prefix": "Key prefix for Redis session streams (default: openclaw:session).",
+  "sessionStore.sqlite.path":
+    "Path to SQLite database for session storage (default: ~/.openclaw/sessions.db).",
+  "sessionStore.maxEntries":
+    "Maximum session entries before recommending compaction (default: 500).",
+  "sessionStore.compactionTriggerBytes":
+    "Total session bytes before recommending compaction (default: 150000).",
   "auth.profiles": "Named auth profiles (provider + mode + optional email).",
   "auth.order": "Ordered auth profile IDs per provider (used for automatic failover).",
   "auth.cooldowns.billingBackoffHours":

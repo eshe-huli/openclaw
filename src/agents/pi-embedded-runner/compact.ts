@@ -15,6 +15,10 @@ import { resolveChannelCapabilities } from "../../config/channel-capabilities.js
 import { getMachineDisplayName } from "../../infra/machine-name.js";
 import { type enqueueCommand, enqueueCommandInLane } from "../../process/command-queue.js";
 import { isSubagentSessionKey } from "../../routing/session-key.js";
+import {
+  hydrateSessionFromBackend,
+  mirrorCompactionToBackend,
+} from "../../sessions/session-backend-bridge.js";
 import { resolveSignalReactionLevel } from "../../signal/reaction-level.js";
 import { resolveTelegramInlineButtonsScope } from "../../telegram/inline-buttons.js";
 import { resolveTelegramReactionLevel } from "../../telegram/reaction-level.js";
@@ -370,6 +374,9 @@ export async function compactEmbeddedPiSessionDirect(
         sessionFile: params.sessionFile,
         warn: (message) => log.warn(message),
       });
+      // Hydrate JSONL from backend if file is missing/empty but backend has data.
+      await hydrateSessionFromBackend(params.sessionFile, params.sessionId);
+
       await prewarmSessionFile(params.sessionFile);
       const transcriptPolicy = resolveTranscriptPolicy({
         modelApi: model.api,
@@ -457,6 +464,10 @@ export async function compactEmbeddedPiSessionDirect(
           // If estimation fails, leave tokensAfter undefined
           tokensAfter = undefined;
         }
+
+        // Mirror compacted session state to the backend (fire-and-forget).
+        void mirrorCompactionToBackend(params.sessionFile, params.sessionId);
+
         return {
           ok: true,
           compacted: true,

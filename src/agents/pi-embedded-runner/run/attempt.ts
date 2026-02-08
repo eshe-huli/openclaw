@@ -11,6 +11,8 @@ import { getMachineDisplayName } from "../../../infra/machine-name.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import { isSubagentSessionKey, normalizeAgentId } from "../../../routing/session-key.js";
+import { hydrateSessionFromBackend } from "../../../sessions/session-backend-bridge.js";
+import { emitSessionSync } from "../../../sessions/session-write-events.js";
 import { resolveSignalReactionLevel } from "../../../signal/reaction-level.js";
 import { resolveTelegramInlineButtonsScope } from "../../../telegram/inline-buttons.js";
 import { resolveTelegramReactionLevel } from "../../../telegram/reaction-level.js";
@@ -423,6 +425,9 @@ export async function runEmbeddedAttempt(
         provider: params.provider,
         modelId: params.modelId,
       });
+
+      // Hydrate JSONL from backend if file is missing/empty but backend has data.
+      await hydrateSessionFromBackend(params.sessionFile, params.sessionId);
 
       await prewarmSessionFile(params.sessionFile);
       sessionManager = guardSessionManager(SessionManager.open(params.sessionFile), {
@@ -926,6 +931,14 @@ export async function runEmbeddedAttempt(
       // Always tear down the session (and release the lock) before we leave this attempt.
       sessionManager?.flushPendingToolResults?.();
       session?.dispose();
+
+      // Mirror session state to the backend after the run completes (fire-and-forget).
+      emitSessionSync({
+        sessionFile: params.sessionFile,
+        sessionId: params.sessionId,
+        reason: "run",
+      });
+
       await sessionLock.release();
     }
   } finally {

@@ -508,6 +508,34 @@ export const OpenClawSchema = z
       .strict()
       .optional(),
     memory: MemorySchema,
+    sessionStore: z
+      .object({
+        store: z
+          .union([
+            z.literal("auto"),
+            z.literal("redis-stream"),
+            z.literal("sqlite"),
+            z.literal("jsonl"),
+          ])
+          .optional(),
+        redis: z
+          .object({
+            url: z.string().optional(),
+            prefix: z.string().optional(),
+          })
+          .strict()
+          .optional(),
+        sqlite: z
+          .object({
+            path: z.string().optional(),
+          })
+          .strict()
+          .optional(),
+        maxEntries: z.number().int().positive().optional(),
+        compactionTriggerBytes: z.number().int().positive().optional(),
+      })
+      .strict()
+      .optional(),
     skills: z
       .object({
         allowBundled: z.array(z.string()).optional(),

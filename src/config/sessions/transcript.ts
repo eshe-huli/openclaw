@@ -2,6 +2,7 @@ import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding
 import fs from "node:fs";
 import path from "node:path";
 import type { SessionEntry } from "./types.js";
+import { emitSessionSync } from "../../sessions/session-write-events.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { resolveDefaultSessionStorePath, resolveSessionTranscriptPath } from "./paths.js";
 import { loadSessionStore, updateSessionStore } from "./store.js";
@@ -143,5 +144,10 @@ export async function appendAssistantMessageToSessionTranscript(params: {
   }
 
   emitSessionTranscriptUpdate(sessionFile);
+  emitSessionSync({
+    sessionFile,
+    sessionId: entry.sessionId,
+    reason: "mirror",
+  });
   return { ok: true, sessionFile };
 }

@@ -1,3 +1,4 @@
+import type { SessionStoreConfig } from "../sessions/session-store.js";
 import type { AgentBinding, AgentsConfig } from "./types.agents.js";
 import type { ApprovalsConfig } from "./types.approvals.js";
 import type { AuthConfig } from "./types.auth.js";
@@ -97,6 +98,7 @@ export type OpenClawConfig = {
   talk?: TalkConfig;
   gateway?: GatewayConfig;
   memory?: MemoryConfig;
+  sessionStore?: SessionStoreConfig;
 };
 
 export type ConfigValidationIssue = {

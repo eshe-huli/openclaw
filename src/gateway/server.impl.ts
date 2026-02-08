@@ -41,6 +41,11 @@ import {
 import { scheduleGatewayUpdateCheck } from "../infra/update-startup.js";
 import { startDiagnosticHeartbeat, stopDiagnosticHeartbeat } from "../logging/diagnostic.js";
 import { createSubsystemLogger, runtimeForLogger } from "../logging/subsystem.js";
+import { closeSessionBackend, initSessionBackend } from "../sessions/backend-registry.js";
+import {
+  startSessionSyncListener,
+  stopSessionSyncListener,
+} from "../sessions/session-backend-bridge.js";
 import { runOnboardingWizard } from "../wizard/onboarding.js";
 import { startGatewayConfigReloader } from "./config-reload.js";
 import { ExecApprovalManager } from "./exec-approval-manager.js";
@@ -224,6 +229,17 @@ export async function startGatewayServer(
   }
   setGatewaySigusr1RestartPolicy({ allowExternal: cfgAtStart.commands?.restart === true });
   initSubagentRegistry();
+
+  // Initialize the pluggable session backend (Redis / SQLite / JSONL).
+  // Non-blocking: backend failure doesn't prevent gateway startup.
+  void initSessionBackend(cfgAtStart.sessionStore)
+    .then((backend) => {
+      if (backend) {
+        startSessionSyncListener();
+      }
+    })
+    .catch((err) => log.warn(`session-store: init failed (non-fatal): ${String(err)}`));
+
   const defaultAgentId = resolveDefaultAgentId(cfgAtStart);
   const defaultWorkspaceDir = resolveAgentWorkspaceDir(cfgAtStart, defaultAgentId);
   const baseMethods = listGatewayMethods();
@@ -632,6 +648,8 @@ export async function startGatewayServer(
         skillsRefreshTimer = null;
       }
       skillsChangeUnsub();
+      stopSessionSyncListener();
+      await closeSessionBackend();
       await close(opts);
     },
   };
