@@ -58,7 +58,7 @@ export class SqliteBackend implements SessionBackend {
 
     // Try Bun's built-in SQLite first, then fall to better-sqlite3
     let db: BetterSqlite3Database;
-    const isBun = typeof globalThis.Bun !== "undefined";
+    const isBun = typeof (globalThis as any).Bun !== "undefined";
 
     if (isBun) {
       try {
@@ -73,7 +73,7 @@ export class SqliteBackend implements SessionBackend {
       }
     } else {
       try {
-        const mod = (await import("better-sqlite3")) as {
+        const mod = (await import("better-sqlite3")) as unknown as {
           default: new (path: string) => BetterSqlite3Database;
         };
         db = new mod.default(resolvedPath);
@@ -157,7 +157,9 @@ export class SqliteBackend implements SessionBackend {
     let totalBytes = 0;
 
     for (const row of rows) {
-      if (maxBytes !== undefined && totalBytes + row.entry_json.length > maxBytes) break;
+      if (maxBytes !== undefined && totalBytes + row.entry_json.length > maxBytes) {
+        break;
+      }
       totalBytes += row.entry_json.length;
       try {
         entries.push(JSON.parse(row.entry_json) as FileEntry);

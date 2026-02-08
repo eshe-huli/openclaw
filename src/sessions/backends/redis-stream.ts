@@ -47,14 +47,16 @@ export class RedisStreamBackend implements SessionBackend {
     }
 
     // Dynamic import so the module doesn't fail if ioredis isn't installed
-    const { default: IORedis } = (await import("ioredis")) as {
+    const { default: IORedis } = (await import("ioredis")) as unknown as {
       default: new (url?: string, opts?: RedisOptions) => Redis;
     };
     const url = opts.url?.trim() || "redis://127.0.0.1:6379";
     const client = new IORedis(url, {
       maxRetriesPerRequest: 3,
       retryStrategy(times: number) {
-        if (times > 5) return null; // stop retrying
+        if (times > 5) {
+          return null;
+        } // stop retrying
         return Math.min(times * 200, 2000);
       },
       lazyConnect: true,
@@ -101,8 +103,12 @@ export class RedisStreamBackend implements SessionBackend {
 
     for (const [, fields] of raw) {
       const json = fields[1];
-      if (!json) continue;
-      if (maxBytes !== undefined && totalBytes + json.length > maxBytes) break;
+      if (!json) {
+        continue;
+      }
+      if (maxBytes !== undefined && totalBytes + json.length > maxBytes) {
+        break;
+      }
       totalBytes += json.length;
       try {
         entries.push(JSON.parse(json) as FileEntry);
@@ -146,7 +152,9 @@ export class RedisStreamBackend implements SessionBackend {
       let sampleBytes = 0;
       for (const [, fields] of sample) {
         const json = fields[1];
-        if (json) sampleBytes += json.length;
+        if (json) {
+          sampleBytes += json.length;
+        }
       }
       const avgSize = sample.length > 0 ? sampleBytes / sample.length : 0;
       bytes = Math.round(avgSize * len);
