@@ -14,6 +14,7 @@ export type RingforgeConfig = {
   agentName: string;
   framework?: string;
   capabilities?: string[];
+  model?: string;
 };
 
 export type RingforgeMessage = {
@@ -108,6 +109,7 @@ export class RingforgeClient {
       name: this.config.agentName,
       framework: this.config.framework || "openclaw",
       capabilities: this.config.capabilities || [],
+      model: this.config.model || undefined,
     });
 
     const wsUrl = `${this.config.server}?vsn=2.0.0&api_key=${encodeURIComponent(this.config.apiKey)}&agent=${encodeURIComponent(agentInfo)}`;

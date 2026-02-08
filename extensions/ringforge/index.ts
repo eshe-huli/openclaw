@@ -50,6 +50,7 @@ function resolveConfig(
       `openclaw-${Math.random().toString(36).slice(2, 8)}`,
     framework: "openclaw",
     capabilities: (pluginConfig.capabilities as string[]) || [],
+    model: (pluginConfig.model as string) || undefined,
   };
 }
 
@@ -144,18 +145,23 @@ const ringforgePlugin = {
         pushIncomingMessage(from, message);
 
         // DM → Agent Turn Injection: inject as system event so the LLM processes it
-        const injection = (message as Record<string, unknown>).injection || "queue";
+        // Default to "immediate" — agents should auto-respond like Telegram bots
+        const injection = (message as Record<string, unknown>).injection || "immediate";
         const priority = (message as Record<string, unknown>).priority || "normal";
 
-        if (injection === "immediate" || priority === "high") {
-          // Immediate injection — trigger agent turn
+        if (injection !== "silent") {
+          // Immediate injection — trigger agent turn so the LLM processes and responds
           const eventText = formatDmAsSystemEvent(from, message);
-          // Use agent:main:main as default session key for the primary agent
           const sessionKey = "agent:main:main";
-          api.runtime.system.enqueueSystemEvent(eventText, { sessionKey });
-          api.logger.info(`Ringforge: injected DM from ${fromName} as system event (immediate)`);
+
+          try {
+            api.runtime.system.enqueueSystemEvent(eventText, { sessionKey });
+            api.logger.info(`Ringforge: injected DM from ${fromName} as system event`);
+          } catch (err) {
+            api.logger.warn(`Ringforge: failed to inject DM as system event: ${err}`);
+          }
         }
-        // "queue" mode: message stays in inbox, agent checks via ringforge_inbox tool
+        // "silent" mode: message stays in inbox only, agent checks via ringforge_inbox tool
       },
       onRoster: (agents) => {
         updateRoster(agents);
