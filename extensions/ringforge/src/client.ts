@@ -2,10 +2,19 @@
  * Ringforge WebSocket client — Phoenix Channel protocol v2
  *
  * Connects to a Ringforge hub, joins a fleet channel, handles presence,
- * messaging, memory, and auto-reconnect.
+ * messaging, crypto key exchange, memory, and auto-reconnect with backoff.
  */
 
 import WebSocket from "ws";
+import {
+  protect,
+  unprotect,
+  decodeSecret,
+  type CryptoMode,
+  type ProtectedEnvelope,
+} from "./crypto.js";
+
+// ── Types ────────────────────────────────────────────────────
 
 export type RingforgeConfig = {
   server: string;
@@ -15,6 +24,8 @@ export type RingforgeConfig = {
   framework?: string;
   capabilities?: string[];
   model?: string;
+  /** Crypto mode for outgoing messages (default: sign_encrypt) */
+  cryptoMode?: CryptoMode;
 };
 
 export type RingforgeMessage = {
@@ -29,6 +40,7 @@ export type RingforgeAgent = {
   task?: string;
   framework?: string;
   capabilities?: string[];
+  model?: string;
 };
 
 export type RingforgeEventHandler = {
@@ -39,6 +51,8 @@ export type RingforgeEventHandler = {
   onPresenceLeft?: (agentId: string) => void;
   onActivity?: (activity: Record<string, unknown>) => void;
   onRoster?: (agents: RingforgeAgent[]) => void;
+  onCryptoKeyReceived?: (kid: string) => void;
+  onCryptoKeyRotated?: (kid: string) => void;
 };
 
 type PendingReply = {
@@ -46,6 +60,8 @@ type PendingReply = {
   reject: (err: Error) => void;
   timer: ReturnType<typeof setTimeout>;
 };
+
+// ── Client ───────────────────────────────────────────────────
 
 export class RingforgeClient {
   private ws: WebSocket | null = null;
@@ -56,15 +72,20 @@ export class RingforgeClient {
   private fleetTopic: string | null = null;
   private heartbeatInterval: ReturnType<typeof setInterval> | null = null;
   private reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
+  private reconnectAttempts = 0;
   private stopped = false;
   private agentId: string | null = null;
   private connectedAt: number | null = null;
   private pendingReplies = new Map<string, PendingReply>();
+  private fleetKey: Buffer | null = null;
+  private fleetKeyKid = "fleet_key";
 
   constructor(config: RingforgeConfig, handlers: RingforgeEventHandler = {}) {
     this.config = config;
     this.handlers = handlers;
   }
+
+  // ── Wire helpers ──────────────────────────────────────────
 
   private makeRef(): string {
     return String(++this.refCounter);
@@ -85,15 +106,19 @@ export class RingforgeClient {
   }
 
   /**
-   * Push a channel event and wait for the phx_reply.
-   * Returns the reply response payload. Rejects on error or timeout.
+   * Push a channel event and await the phx_reply.
+   * Rejects on error or timeout.
    */
-  private pushChannelAsync(
+  pushChannelAsync(
     event: string,
     payload: Record<string, unknown> = {},
     timeoutMs = 10_000,
   ): Promise<Record<string, unknown>> {
     return new Promise((resolve, reject) => {
+      if (!this.isConnected) {
+        reject(new Error("Not connected"));
+        return;
+      }
       const ref = this.pushChannel(event, payload);
       const timer = setTimeout(() => {
         this.pendingReplies.delete(ref);
@@ -103,8 +128,12 @@ export class RingforgeClient {
     });
   }
 
+  // ── Connection lifecycle ──────────────────────────────────
+
   connect(): void {
     this.stopped = false;
+    this.fleetKey = null; // Reset crypto on reconnect
+
     const agentInfo = JSON.stringify({
       name: this.config.agentName,
       framework: this.config.framework || "openclaw",
@@ -114,39 +143,43 @@ export class RingforgeClient {
 
     const wsUrl = `${this.config.server}?vsn=2.0.0&api_key=${encodeURIComponent(this.config.apiKey)}&agent=${encodeURIComponent(agentInfo)}`;
 
-    this.ws = new WebSocket(wsUrl);
+    try {
+      this.ws = new WebSocket(wsUrl);
+    } catch {
+      this.scheduleReconnect();
+      return;
+    }
 
     this.ws.on("open", () => {
       this.connectedAt = Date.now();
+      this.reconnectAttempts = 0;
 
-      // Phoenix heartbeat
+      // Phoenix heartbeat (30s interval)
       this.heartbeatInterval = setInterval(() => {
         this.send([null, this.makeRef(), "phoenix", "heartbeat", {}]);
-      }, 30000);
+      }, 30_000);
 
-      // Join fleet channel
       this.joinFleet();
     });
 
     this.ws.on("message", (data: WebSocket.Data) => {
       try {
         const msg = JSON.parse(data.toString());
-        const [_jRef, ref, topic, event, payload] = msg;
-        this.handleMessage(topic, event, payload, ref);
+        const [_jRef, ref, _topic, event, payload] = msg;
+        this.handleMessage(event, payload, ref);
       } catch {
-        // ignore malformed messages
+        // Ignore malformed frames
       }
     });
 
     this.ws.on("close", (_code: number, reason: Buffer) => {
       this.cleanup();
-      const reasonStr = reason?.toString() || "unknown";
-      this.handlers.onDisconnected?.(reasonStr);
+      this.handlers.onDisconnected?.(reason?.toString() || "closed");
       this.scheduleReconnect();
     });
 
     this.ws.on("error", () => {
-      // error handler to prevent unhandled exception — close will fire next
+      // Swallow — close event fires next
     });
   }
 
@@ -154,7 +187,11 @@ export class RingforgeClient {
     this.stopped = true;
     this.cleanup();
     if (this.ws) {
-      this.ws.close();
+      try {
+        this.ws.close();
+      } catch {
+        // ignore
+      }
       this.ws = null;
     }
   }
@@ -164,7 +201,6 @@ export class RingforgeClient {
       clearInterval(this.heartbeatInterval);
       this.heartbeatInterval = null;
     }
-    // Reject all pending replies
     for (const [ref, pending] of this.pendingReplies) {
       clearTimeout(pending.timer);
       pending.reject(new Error("Connection closed"));
@@ -175,10 +211,15 @@ export class RingforgeClient {
   private scheduleReconnect(): void {
     if (this.stopped) return;
     if (this.reconnectTimeout) clearTimeout(this.reconnectTimeout);
-    this.reconnectTimeout = setTimeout(() => {
-      this.connect();
-    }, 3000);
+
+    // Exponential backoff: 1s, 2s, 4s, 8s, 16s, 30s max
+    const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30_000);
+    this.reconnectAttempts++;
+
+    this.reconnectTimeout = setTimeout(() => this.connect(), delay);
   }
+
+  // ── Fleet join + crypto key ───────────────────────────────
 
   private joinFleet(): void {
     this.fleetTopic = `fleet:${this.config.fleetId}`;
@@ -197,62 +238,48 @@ export class RingforgeClient {
         },
       },
     ]);
+
+    // Request crypto key (non-blocking)
+    this.fetchCryptoKey();
   }
 
-  private handleMessage(
-    topic: string,
-    event: string,
-    payload: Record<string, unknown>,
-    ref?: string,
-  ): void {
+  private fetchCryptoKey(): void {
+    if (!this.fleetTopic) return;
+
+    this.pushChannelAsync("crypto:key", {}, 8_000)
+      .then((response) => {
+        // Response shape: { type, event, payload: { key, kid, alg, enc, mode } }
+        const p = (response as Record<string, unknown>)?.payload as
+          | Record<string, unknown>
+          | undefined;
+        const encodedKey = (p?.key as string) || (response?.key as string);
+        const kid = (p?.kid as string) || "fleet_key";
+
+        if (encodedKey) {
+          this.fleetKey = decodeSecret(encodedKey);
+          this.fleetKeyKid = kid;
+          this.handlers.onCryptoKeyReceived?.(kid);
+        }
+      })
+      .catch(() => {
+        // Hub doesn't support crypto or key not available — continue plaintext
+        this.fleetKey = null;
+      });
+  }
+
+  // ── Message dispatch ──────────────────────────────────────
+
+  private handleMessage(event: string, payload: Record<string, unknown>, ref?: string): void {
+    // Unwrap nested payload (Phoenix convention)
     const p = (payload?.payload as Record<string, unknown>) || payload;
 
     switch (event) {
-      case "phx_reply": {
-        // Resolve pending async replies
-        if (ref && this.pendingReplies.has(ref)) {
-          const pending = this.pendingReplies.get(ref)!;
-          this.pendingReplies.delete(ref);
-          clearTimeout(pending.timer);
-          const status = (payload as Record<string, unknown>)?.status;
-          if (status === "ok") {
-            const response = (payload as Record<string, unknown>)?.response;
-            pending.resolve((response as Record<string, unknown>) || {});
-          } else {
-            const response = (payload as Record<string, unknown>)?.response;
-            pending.reject(
-              new Error(`Reply error: ${JSON.stringify(response || payload).slice(0, 200)}`),
-            );
-          }
-          return;
-        }
-
-        const status = (payload as Record<string, unknown>)?.status;
-        if (status === "error") {
-          const resp = (payload as Record<string, unknown>)?.response as Record<string, unknown>;
-          if (resp?.reason === "fleet_id_mismatch" && resp?.your_fleet_id) {
-            this.config.fleetId = resp.your_fleet_id as string;
-            this.joinFleet();
-          }
-        }
+      case "phx_reply":
+        this.handleReply(payload, ref);
         break;
-      }
-
-      case "presence:joined": {
-        const agent = p as unknown as RingforgeAgent;
-        this.handlers.onPresenceJoined?.(agent);
-        break;
-      }
-
-      case "presence:left": {
-        const agentId = (p as Record<string, unknown>)?.agent_id as string;
-        this.handlers.onPresenceLeft?.(agentId);
-        break;
-      }
 
       case "presence:roster": {
         const agents = ((p as Record<string, unknown>)?.agents || []) as RingforgeAgent[];
-        // Extract own agent_id from roster
         for (const a of agents) {
           if (a.name === this.config.agentName) {
             this.agentId = a.agent_id;
@@ -264,44 +291,137 @@ export class RingforgeClient {
         break;
       }
 
-      case "direct:message": {
-        const from = (p as Record<string, unknown>)?.from as RingforgeAgent;
-        const message = (p as Record<string, unknown>)?.message as RingforgeMessage;
-        if (message && from) {
-          this.handlers.onDirectMessage?.(from, message);
+      case "presence:joined":
+        this.handlers.onPresenceJoined?.(p as unknown as RingforgeAgent);
+        break;
+
+      case "presence:left":
+        this.handlers.onPresenceLeft?.((p as Record<string, unknown>)?.agent_id as string);
+        break;
+
+      case "direct:message":
+        this.handleDirectMessage(p);
+        break;
+
+      case "crypto:rotated": {
+        const encodedKey = (p as Record<string, unknown>)?.key as string;
+        const kid = ((p as Record<string, unknown>)?.kid as string) || "fleet_key";
+        if (encodedKey) {
+          this.fleetKey = decodeSecret(encodedKey);
+          this.fleetKeyKid = kid;
+          this.handlers.onCryptoKeyRotated?.(kid);
         }
         break;
       }
 
-      case "activity:broadcast": {
+      case "activity:broadcast":
         this.handlers.onActivity?.(p);
         break;
-      }
 
-      // presence_diff — ignore (roster handles it)
+      // role:assigned, context:*, notifications — let them pass silently
       default:
         break;
     }
   }
 
-  // ── Public API ────────────────────────────────────────────
+  private handleReply(payload: Record<string, unknown>, ref?: string): void {
+    if (ref && this.pendingReplies.has(ref)) {
+      const pending = this.pendingReplies.get(ref)!;
+      this.pendingReplies.delete(ref);
+      clearTimeout(pending.timer);
 
-  sendDM(toAgentId: string, message: RingforgeMessage): void {
-    this.pushChannel("direct:send", {
-      payload: { to: toAgentId, message },
-    });
+      const status = payload?.status as string;
+      if (status === "ok") {
+        pending.resolve((payload?.response as Record<string, unknown>) || {});
+      } else {
+        pending.reject(
+          new Error(`Reply error: ${JSON.stringify(payload?.response || payload).slice(0, 200)}`),
+        );
+      }
+      return;
+    }
+
+    // Auto-correct fleet ID mismatch
+    const status = payload?.status as string;
+    if (status === "error") {
+      const resp = payload?.response as Record<string, unknown>;
+      if (resp?.reason === "fleet_id_mismatch" && resp?.your_fleet_id) {
+        this.config.fleetId = resp.your_fleet_id as string;
+        this.joinFleet();
+      }
+    }
   }
 
+  private handleDirectMessage(p: Record<string, unknown>): void {
+    const from = p?.from as RingforgeAgent;
+    let message = p?.message as RingforgeMessage;
+    const cryptoMeta = p?.crypto as Record<string, unknown>;
+
+    // Attempt decryption if crypto envelope present
+    if (cryptoMeta && cryptoMeta.mode !== "none" && this.fleetKey) {
+      try {
+        const envelope: ProtectedEnvelope = {
+          jws: p?.jws as string | undefined,
+          jwe: p?.jwe as string | undefined,
+          message: message as Record<string, unknown>,
+          crypto: cryptoMeta as ProtectedEnvelope["crypto"],
+        };
+        const result = unprotect(envelope, this.fleetKey);
+        if (result.ok) {
+          message = result.payload as RingforgeMessage;
+        }
+      } catch {
+        // Decrypt failed — use plaintext fallback
+      }
+    }
+
+    if (message && from) {
+      this.handlers.onDirectMessage?.(from, message);
+    }
+  }
+
+  // ── Public API ────────────────────────────────────────────
+
+  /** Send a DM (encrypted if fleet key available). */
+  sendDM(toAgentId: string, message: RingforgeMessage): void {
+    const cryptoMode = this.config.cryptoMode || "sign_encrypt";
+
+    if (cryptoMode !== "none" && this.fleetKey) {
+      const envelope = protect(
+        message as Record<string, unknown>,
+        this.fleetKey,
+        cryptoMode,
+        this.fleetKeyKid,
+      );
+      this.pushChannel("direct:send", {
+        payload: {
+          to: toAgentId,
+          message, // Plaintext for server-side storage
+          jws: envelope.jws,
+          jwe: envelope.jwe,
+          crypto: envelope.crypto,
+        },
+      });
+    } else {
+      this.pushChannel("direct:send", {
+        payload: { to: toAgentId, message },
+      });
+    }
+  }
+
+  /** Send a plain text DM. */
   sendText(toAgentId: string, text: string): void {
     this.sendDM(toAgentId, { type: "text", text });
   }
 
+  /** Broadcast an activity event. */
   broadcastActivity(kind: string, description: string, tags: string[] = []): void {
     this.pushChannel("activity:broadcast", {
       payload: { kind, description, tags },
     });
   }
 
+  /** Update presence state/task/model. */
   updatePresence(update: { state?: string; task?: string; model?: string; load?: number }): void {
     const payload: Record<string, unknown> = {};
     if (update.state) payload.state = update.state;
@@ -311,20 +431,22 @@ export class RingforgeClient {
     this.pushChannel("presence:update", { payload });
   }
 
+  /** Request a fresh roster push. */
   requestRoster(): void {
     this.pushChannel("presence:roster", {});
   }
 
+  /** Set a fleet memory key. */
   setMemory(key: string, value: unknown): void {
     this.pushChannel("memory:set", { payload: { key, value } });
   }
 
-  /**
-   * Get a memory value. Returns the reply payload with the value.
-   */
+  /** Get a fleet memory key (async). */
   async getMemoryAsync(key: string): Promise<Record<string, unknown>> {
     return this.pushChannelAsync("memory:get", { payload: { key } });
   }
+
+  // ── Accessors ─────────────────────────────────────────────
 
   get isConnected(): boolean {
     return this.ws?.readyState === WebSocket.OPEN && this.fleetTopic !== null;
@@ -336,5 +458,13 @@ export class RingforgeClient {
 
   get uptimeMs(): number {
     return this.connectedAt ? Date.now() - this.connectedAt : 0;
+  }
+
+  get hasCrypto(): boolean {
+    return this.fleetKey !== null;
+  }
+
+  get currentFleetId(): string {
+    return this.config.fleetId;
   }
 }

@@ -1,7 +1,7 @@
 /**
- * Ringforge OpenClaw Plugin
+ * Ringforge OpenClaw Plugin v0.4.0
  *
- * Connects any OpenClaw agent to a Ringforge fleet with just config:
+ * Connects any OpenClaw agent to a Ringforge fleet:
  *
  *   plugins:
  *     entries:
@@ -13,38 +13,42 @@
  *           fleetId: "default"
  *           agentName: "My Agent"
  *           capabilities: ["code", "research"]
+ *           autoReply: true
+ *           cryptoMode: "sign_encrypt"
+ *           contextRefreshMs: 300000
+ *           maxContextChars: 4000
  *
- * The plugin:
- * - Starts a persistent WebSocket connection to the hub on gateway_start
- * - Registers tools so the LLM can send messages, check roster, broadcast activity
- * - Routes incoming DMs into the agent's pending message queue
- * - Auto-reconnects on disconnect
+ * Features:
+ * - Persistent WebSocket connection with auto-reconnect + exponential backoff
+ * - JWS/JWE encrypted messaging (auto-negotiated fleet key)
+ * - DM auto-reply: captures LLM output via agent_end hook, sends back to sender
+ * - Context injection: kanban + role + squad + fleet + artifacts + rules → LLM prompt
+ * - 10 tools: roster, send, inbox, activity, presence, memory, kanban, context, task_update
  */
 
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
-import { RingforgeClient, type RingforgeConfig } from "./src/client.js";
+import type { CryptoMode } from "./src/crypto.js";
+import { RingforgeClient, type RingforgeConfig, type RingforgeMessage } from "./src/client.js";
+import { ContextManager } from "./src/context-manager.js";
+import { DmHandler } from "./src/dm-handler.js";
 import { createRingforgeTools, updateRoster, pushIncomingMessage } from "./src/tools.js";
 
-let client: RingforgeClient | null = null;
-let lastKnownModel: string | null = null;
+// ── Config Resolution ────────────────────────────────────────
 
 function resolveConfig(
   pluginConfig: Record<string, unknown> | undefined,
   agentName?: string,
 ): RingforgeConfig | null {
-  if (!pluginConfig) return null;
-  if (pluginConfig.enabled === false) return null;
+  if (!pluginConfig || pluginConfig.enabled === false) return null;
 
   const server = pluginConfig.server as string;
   const apiKey = pluginConfig.apiKey as string;
-  const fleetId = (pluginConfig.fleetId as string) || "default";
-
   if (!server || !apiKey) return null;
 
   return {
     server,
     apiKey,
-    fleetId,
+    fleetId: (pluginConfig.fleetId as string) || "default",
     agentName:
       (pluginConfig.agentName as string) ||
       agentName ||
@@ -52,30 +56,23 @@ function resolveConfig(
     framework: "openclaw",
     capabilities: (pluginConfig.capabilities as string[]) || [],
     model: (pluginConfig.model as string) || undefined,
+    cryptoMode: ((pluginConfig.cryptoMode as string) || "sign_encrypt") as CryptoMode,
   };
 }
 
-function resolveCurrentModel(api: OpenClawPluginApi): string | null {
+function resolveModel(api: OpenClawPluginApi): string | null {
   try {
-    // Try multiple paths where model might be configured
     const cfg = api.config as Record<string, unknown>;
-
-    // 1. Direct model field in agent config
     if (typeof cfg.model === "string") return cfg.model;
 
-    // 2. Agent runtime model
-    const agentRuntime = cfg.agentRuntime as Record<string, unknown> | undefined;
-    if (agentRuntime?.model && typeof agentRuntime.model === "string") return agentRuntime.model;
+    const rt = cfg.agentRuntime as Record<string, unknown> | undefined;
+    if (typeof rt?.model === "string") return rt.model;
 
-    // 3. Default model from models config
     const models = cfg.models as Record<string, unknown> | undefined;
-    if (models?.default && typeof models.default === "string") return models.default;
+    if (typeof models?.default === "string") return models.default;
 
-    // 4. Reload config and check
-    const freshConfig = api.runtime.config.loadConfig();
-    if (freshConfig && typeof (freshConfig as Record<string, unknown>).model === "string") {
-      return (freshConfig as Record<string, unknown>).model as string;
-    }
+    const fresh = api.runtime.config.loadConfig() as Record<string, unknown> | null;
+    if (typeof fresh?.model === "string") return fresh.model;
 
     return null;
   } catch {
@@ -83,67 +80,67 @@ function resolveCurrentModel(api: OpenClawPluginApi): string | null {
   }
 }
 
-function formatDmAsSystemEvent(
+// ── DM System Event Formatting ───────────────────────────────
+
+function formatDmEvent(
   from: { name?: string; agent_id: string },
   message: Record<string, unknown>,
 ): string {
-  const fromName = from.name || from.agent_id;
+  const who = `${from.name || from.agent_id} (${from.agent_id})`;
   const type = (message.type as string) || "text";
 
   switch (type) {
     case "text":
-      return `[Ringforge DM] ${fromName}: ${message.text}`;
-
+      return `[Ringforge DM from ${who}] ${message.text}`;
     case "task_request":
-      return `[Ringforge Task] ${fromName} assigned task "${message.task}": ${message.description || ""}${message.priority === "high" ? " ⚡ HIGH PRIORITY" : ""}`;
-
+      return `[Ringforge Task from ${who}] "${message.task}": ${message.description || ""}${message.priority === "high" ? " ⚡ HIGH" : ""}`;
     case "query":
-      return `[Ringforge Query] ${fromName} asks: ${message.question}`;
-
+      return `[Ringforge Query from ${who}] ${message.question}`;
     case "status_request":
-      return `[Ringforge] ${fromName} requests your status. Reply using ringforge_send.`;
-
+      return `[Ringforge Status Request from ${who}] Requesting status.`;
     case "data":
-      return `[Ringforge Data] ${fromName} sent data "${message.label}": ${JSON.stringify(message.payload).slice(0, 500)}`;
-
+      return `[Ringforge Data from ${who}] "${message.label}": ${JSON.stringify(message.payload).slice(0, 500)}`;
     case "task_result":
-      return `[Ringforge Result] ${fromName} completed task (ref=${message.ref}): ${JSON.stringify(message.result).slice(0, 500)}`;
-
+      return `[Ringforge Result from ${who}] ref=${message.ref}: ${JSON.stringify(message.result).slice(0, 500)}`;
     default:
-      return `[Ringforge DM] ${fromName} [${type}]: ${JSON.stringify(message).slice(0, 500)}`;
+      return `[Ringforge DM from ${who}] [${type}]: ${JSON.stringify(message).slice(0, 500)}`;
   }
 }
+
+// ── Plugin Definition ────────────────────────────────────────
 
 const ringforgePlugin = {
   id: "ringforge",
   name: "Ringforge",
   description: "Connect to a Ringforge agent mesh fleet",
-  version: "0.1.0",
+  version: "0.4.0",
 
   configSchema: {
     parse(value: unknown) {
-      if (!value || typeof value !== "object") return {};
-      return value;
+      return value && typeof value === "object" ? value : {};
     },
     uiHints: {
-      enabled: { label: "Enabled", help: "Enable Ringforge mesh connection" },
-      server: {
-        label: "Server URL",
-        placeholder: "wss://ringforge.wejoona.com",
-      },
-      apiKey: {
-        label: "API Key",
-        sensitive: true,
-        placeholder: "rf_live_...",
-      },
+      enabled: { label: "Enabled", help: "Enable Ringforge mesh" },
+      server: { label: "Server URL", placeholder: "wss://ringforge.wejoona.com" },
+      apiKey: { label: "API Key", sensitive: true, placeholder: "rf_live_..." },
       fleetId: { label: "Fleet ID" },
-      agentName: {
-        label: "Agent Name",
-        help: "Display name in the mesh",
+      agentName: { label: "Agent Name", help: "Display name in the mesh" },
+      capabilities: { label: "Capabilities", help: "Comma-separated" },
+      autoReply: {
+        label: "Auto-Reply",
+        help: "Auto-send LLM replies to DM senders (default: true)",
       },
-      capabilities: {
-        label: "Capabilities",
-        help: "Comma-separated list",
+      cryptoMode: {
+        label: "Crypto Mode",
+        help: "none | sign | encrypt | sign_encrypt (default: sign_encrypt)",
+      },
+      contextRefreshMs: {
+        label: "Context Refresh (ms)",
+        help: "How often to refresh context (default: 300000)",
+      },
+      maxContextChars: {
+        label: "Max Context Chars",
+        help: "Max chars for context injection (default: 4000)",
       },
     },
   },
@@ -152,118 +149,161 @@ const ringforgePlugin = {
     const config = resolveConfig(api.pluginConfig, api.config?.identity?.agentName || api.name);
 
     if (!config) {
-      api.logger.info("Ringforge: disabled or missing config (need server, apiKey)");
+      api.logger.info("Ringforge: disabled (need server + apiKey)");
       return;
     }
 
-    // Create client
-    client = new RingforgeClient(config, {
+    const pc = (api.pluginConfig || {}) as Record<string, unknown>;
+    const autoReply = pc.autoReply !== false;
+    const refreshMs = Number(pc.contextRefreshMs) || 5 * 60 * 1000;
+    const maxCtxChars = Number(pc.maxContextChars) || 4000;
+
+    // ── Instantiate subsystems ──
+
+    let lastModel: string | null = null;
+
+    const client = new RingforgeClient(config, {
       onConnected: (agentId) => {
         api.logger.info(`Ringforge: connected as ${config.agentName} (${agentId})`);
       },
       onDisconnected: (reason) => {
-        api.logger.info(`Ringforge: disconnected (${reason}), reconnecting...`);
+        api.logger.info(`Ringforge: disconnected (${reason})`);
       },
       onDirectMessage: (from, message) => {
-        const fromName = from.name || from.agent_id;
+        const name = from.name || from.agent_id;
         const preview =
-          message.type === "text"
-            ? (message.text as string)
-            : JSON.stringify(message).slice(0, 100);
-        api.logger.info(`Ringforge DM from ${fromName}: ${preview}`);
+          message.type === "text" ? (message.text as string) : JSON.stringify(message).slice(0, 80);
+        api.logger.info(`Ringforge DM from ${name}: ${preview}`);
         pushIncomingMessage(from, message);
 
-        // DM → Agent Turn Injection: inject as system event so the LLM processes it
-        // Default to "immediate" — agents should auto-respond like Telegram bots
         const injection = (message as Record<string, unknown>).injection || "immediate";
-        const priority = (message as Record<string, unknown>).priority || "normal";
+        if (injection === "silent") return;
 
-        if (injection !== "silent") {
-          // Immediate injection — trigger agent turn so the LLM processes and responds
-          const eventText = formatDmAsSystemEvent(from, message);
-          const sessionKey = "agent:main:main";
-
-          try {
-            api.runtime.system.enqueueSystemEvent(eventText, { sessionKey });
-            api.logger.info(`Ringforge: injected DM from ${fromName} as system event`);
-          } catch (err) {
-            api.logger.warn(`Ringforge: failed to inject DM as system event: ${err}`);
-          }
+        const eventText = formatDmEvent(from, message as Record<string, unknown>);
+        try {
+          api.runtime.system.enqueueSystemEvent(eventText, { sessionKey: "agent:main:main" });
+          dmHandler.trackIncoming(from, message, eventText);
+          api.logger.info(`Ringforge: injected DM, ${dmHandler.pendingCount} pending`);
+        } catch (err) {
+          api.logger.warn(`Ringforge: DM injection failed: ${err}`);
         }
-        // "silent" mode: message stays in inbox only, agent checks via ringforge_inbox tool
       },
       onRoster: (agents) => {
         updateRoster(agents);
-        api.logger.info(`Ringforge: roster updated (${agents.length} agents)`);
+        api.logger.info(`Ringforge: roster ${agents.length} agents`);
       },
-      onPresenceJoined: (agent) => {
-        api.logger.info(`Ringforge: ${agent.name || agent.agent_id} joined`);
-      },
-      onPresenceLeft: (agentId) => {
-        api.logger.info(`Ringforge: ${agentId} left`);
-      },
-      onActivity: (activity) => {
-        const kind = activity.kind || "unknown";
-        const desc = activity.description || "";
-        api.logger.info(`Ringforge activity: [${kind}] ${desc}`);
-      },
+      onPresenceJoined: (a) => api.logger.info(`Ringforge: ${a.name || a.agent_id} joined`),
+      onPresenceLeft: (id) => api.logger.info(`Ringforge: ${id} left`),
+      onActivity: (a) => api.logger.info(`Ringforge: [${a.kind}] ${a.description}`),
+      onCryptoKeyReceived: (kid) => api.logger.info(`Ringforge: crypto key received (${kid})`),
+      onCryptoKeyRotated: (kid) => api.logger.info(`Ringforge: crypto key rotated (${kid})`),
     });
 
-    // Detect current model from config
-    const currentModel = resolveCurrentModel(api);
-    if (currentModel) {
-      config.model = currentModel;
-      lastKnownModel = currentModel;
-      api.logger.info(`Ringforge: detected model: ${currentModel}`);
+    const dmHandler = new DmHandler(client, { autoReply });
+
+    const ctxMgr = new ContextManager(client, {
+      refreshIntervalMs: refreshMs,
+      injectContext: true,
+      maxContextChars: maxCtxChars,
+    });
+
+    // ── Detect model ──
+    const model = resolveModel(api);
+    if (model) {
+      config.model = model;
+      lastModel = model;
+      api.logger.info(`Ringforge: model ${model}`);
     }
 
-    // Hook before_agent_start to detect model changes
-    api.on("before_agent_start", (_event, ctx) => {
-      const model = resolveCurrentModel(api);
-      if (model && model !== lastKnownModel) {
-        const oldModel = lastKnownModel;
-        lastKnownModel = model;
-        api.logger.info(`Ringforge: model changed ${oldModel} → ${model}`);
+    // ── Hooks ──
 
-        // Notify Hub of model change via presence update
-        if (client?.isConnected) {
-          client.updatePresence({ model, state: "busy" });
-          api.logger.info(`Ringforge: notified Hub of model change to ${model}`);
+    // Context injection + model change detection
+    api.on("before_agent_start", (_event, _ctx) => {
+      // Model change
+      const m = resolveModel(api);
+      if (m && m !== lastModel) {
+        lastModel = m;
+        if (client.isConnected) {
+          client.updatePresence({ model: m, state: "busy" });
         }
+      }
+
+      // Inject context
+      const prompt = ctxMgr.buildPromptContext();
+      if (prompt) return { prependContext: prompt };
+      return undefined;
+    });
+
+    // Auto-reply to DMs
+    api.on("agent_end", (event, _ctx) => {
+      if (!dmHandler.hasPending()) return;
+      try {
+        if (dmHandler.handleAgentEnd(event.messages || [])) {
+          api.logger.info("Ringforge: auto-replied to DM");
+        }
+      } catch (err) {
+        api.logger.warn(`Ringforge: agent_end DM error: ${err}`);
       }
     });
 
-    // Register tools
-    const tools = createRingforgeTools(client);
+    // ── Tools ──
+    const tools = createRingforgeTools(client, ctxMgr);
     for (const tool of tools) {
       api.registerTool(tool as any, { name: tool.name });
     }
 
-    // Register /ringforge command
+    // ── Command ──
     api.registerCommand({
       name: "ringforge",
       description: "Ringforge mesh status",
       handler: () => {
-        if (!client) return { text: "Ringforge: not configured" };
-        const status = client.isConnected ? "🟢 Connected" : "🔴 Disconnected";
-        const id = client.currentAgentId || "unknown";
-        const uptime = Math.floor(client.uptimeMs / 1000);
+        const s = client.isConnected ? "🟢 Connected" : "🔴 Disconnected";
+        const id = client.currentAgentId || "—";
+        const up = Math.floor(client.uptimeMs / 1000);
+        const pending = dmHandler.pendingCount;
+        const ctx = ctxMgr.isStale() ? "stale" : "fresh";
+        const tasks = (ctxMgr.getContext() as any)?.agent?.tasks?.count ?? "?";
+        const crypto = client.hasCrypto ? "🔒 on" : "off";
         return {
-          text: `Ringforge: ${status}\nAgent: ${config.agentName} (${id})\nFleet: ${config.fleetId}\nUptime: ${uptime}s`,
+          text: [
+            `Ringforge: ${s}`,
+            `Agent: ${config.agentName} (${id})`,
+            `Fleet: ${config.fleetId}`,
+            `Uptime: ${up}s`,
+            `Auto-reply: ${autoReply ? "on" : "off"}`,
+            `Pending DMs: ${pending}`,
+            `Context: ${ctx} (${tasks} tasks)`,
+            `Crypto: ${crypto}`,
+          ].join("\n"),
         };
       },
     });
 
-    // Start connection as a service
+    // ── Service lifecycle ──
     api.registerService({
       id: "ringforge-mesh",
-      start: () => {
-        api.logger.info(`Ringforge: connecting to ${config.server} as "${config.agentName}"...`);
-        client!.connect();
+      start: async () => {
+        api.logger.info(`Ringforge: connecting to ${config.server}...`);
+        client.connect();
+        dmHandler.start();
+
+        // Wait for WS + join, then start context
+        setTimeout(async () => {
+          if (client.isConnected) {
+            try {
+              await ctxMgr.start();
+              api.logger.info("Ringforge: context manager active");
+            } catch (err) {
+              api.logger.warn(`Ringforge: context start failed: ${err}`);
+            }
+          }
+        }, 5000);
       },
       stop: () => {
-        api.logger.info("Ringforge: disconnecting...");
-        client!.disconnect();
+        api.logger.info("Ringforge: shutting down");
+        ctxMgr.stop();
+        dmHandler.stop();
+        client.disconnect();
       },
     });
   },
