@@ -1,7 +1,7 @@
 {
   "name": "openclaw",
-  "version": "2026.2.6",
-  "description": "WhatsApp gateway CLI (Baileys web) with Pi RPC agent",
+  "version": "2026.2.6-3",
+  "description": "Multi-channel AI gateway with extensible messaging integrations",
   "keywords": [],
   "license": "MIT",
   "author": "",
@@ -32,7 +32,8 @@
     "android:install": "cd apps/android && ./gradlew :app:installDebug",
     "android:run": "cd apps/android && ./gradlew :app:installDebug && adb shell am start -n ai.openclaw.android/.MainActivity",
     "android:test": "cd apps/android && ./gradlew :app:testDebugUnitTest",
-    "build": "pnpm canvas:a2ui:bundle && tsdown && node --import tsx scripts/canvas-a2ui-copy.ts && node --import tsx scripts/copy-hook-metadata.ts && node --import tsx scripts/write-build-info.ts && node --import tsx scripts/write-cli-compat.ts",
+    "build": "pnpm canvas:a2ui:bundle && tsdown && pnpm build:plugin-sdk:dts && node --import tsx scripts/write-plugin-sdk-entry-dts.ts && node --import tsx scripts/canvas-a2ui-copy.ts && node --import tsx scripts/copy-hook-metadata.ts && node --import tsx scripts/write-build-info.ts && node --import tsx scripts/write-cli-compat.ts",
+    "build:plugin-sdk:dts": "tsc -p tsconfig.plugin-sdk.dts.json",
     "canvas:a2ui:bundle": "bash scripts/bundle-a2ui.sh",
     "check": "pnpm tsgo && pnpm lint && pnpm format",
     "check:docs": "pnpm format:docs && pnpm lint:docs && pnpm docs:build",
@@ -40,6 +41,7 @@
     "dev": "node scripts/run-node.mjs",
     "docs:bin": "node scripts/build-docs-list.mjs",
     "docs:build": "cd docs && pnpm dlx --reporter append-only mint broken-links",
+    "docs:check-links": "node scripts/docs-link-audit.mjs",
     "docs:dev": "cd docs && mint dev",
     "docs:list": "node scripts/docs-list.js",
     "format": "oxfmt --check",
@@ -113,10 +115,10 @@
     "@larksuiteoapi/node-sdk": "^1.58.0",
     "@line/bot-sdk": "^10.6.0",
     "@lydell/node-pty": "1.2.0-beta.3",
-    "@mariozechner/pi-agent-core": "0.52.7",
-    "@mariozechner/pi-ai": "0.52.7",
-    "@mariozechner/pi-coding-agent": "0.52.7",
-    "@mariozechner/pi-tui": "0.52.7",
+    "@mariozechner/pi-agent-core": "0.52.8",
+    "@mariozechner/pi-ai": "0.52.8",
+    "@mariozechner/pi-coding-agent": "0.52.8",
+    "@mariozechner/pi-tui": "0.52.8",
     "@mozilla/readability": "^0.6.0",
     "@sinclair/typebox": "0.34.48",
     "@slack/bolt": "^4.6.0",
@@ -215,38 +217,6 @@
       "node-llama-cpp",
       "protobufjs",
       "sharp"
-    ]
-  },
-  "vitest": {
-    "coverage": {
-      "provider": "v8",
-      "reporter": [
-        "text",
-        "lcov"
-      ],
-      "thresholds": {
-        "lines": 70,
-        "functions": 70,
-        "branches": 70,
-        "statements": 70
-      },
-      "include": [
-        "src/**/*.ts"
-      ],
-      "exclude": [
-        "src/**/*.test.ts"
-      ]
-    },
-    "include": [
-      "src/**/*.test.ts"
-    ],
-    "exclude": [
-      "dist/**",
-      "apps/macos/**",
-      "apps/macos/.build/**",
-      "**/vendor/**",
-      "apps/macos/.build/**",
-      "dist/OpenClaw.app/**"
     ]
   }
 }

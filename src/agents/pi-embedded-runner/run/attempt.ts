@@ -55,6 +55,7 @@ import {
   sanitizeToolUseResultPairing,
 } from "../../session-transcript-repair.js";
 import { acquireSessionWriteLock } from "../../session-write-lock.js";
+import { detectRuntimeShell } from "../../shell-utils.js";
 import {
   applySkillEnvOverrides,
   applySkillEnvOverridesFromSnapshot,
@@ -337,6 +338,7 @@ export async function runEmbeddedAttempt(
         node: process.version,
         model: `${params.provider}/${params.modelId}`,
         defaultModel: defaultModelLabel,
+        shell: detectRuntimeShell(),
         channel: runtimeChannel,
         capabilities: runtimeCapabilities,
         channelActions,
@@ -662,6 +664,8 @@ export async function runEmbeddedAttempt(
         getMessagingToolSentTargets,
         didSendViaMessagingTool,
         getLastToolError,
+        getUsageTotals,
+        getCompactionCount,
       } = subscription;
 
       const queueHandle: EmbeddedPiQueueHandle = {
@@ -924,6 +928,8 @@ export async function runEmbeddedAttempt(
         cloudCodeAssistFormatError: Boolean(
           lastAssistant?.errorMessage && isCloudCodeAssistFormatError(lastAssistant.errorMessage),
         ),
+        attemptUsage: getUsageTotals(),
+        compactionCount: getCompactionCount(),
         // Client tool call detected (OpenResponses hosted tools)
         clientToolCall: clientToolCallDetected ?? undefined,
       };

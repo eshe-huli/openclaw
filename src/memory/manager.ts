@@ -1902,7 +1902,9 @@ export class MemoryIndexManager implements MemorySearchManager {
     if (!voyage) {
       return this.embedChunksInBatches(chunks);
     }
-    if (chunks.length === 0) return [];
+    if (chunks.length === 0) {
+      return [];
+    }
     const cached = this.loadEmbeddingCache(chunks.map((chunk) => chunk.hash));
     const embeddings: number[][] = Array.from({ length: chunks.length }, () => []);
     const missing: Array<{ index: number; chunk: MemoryChunk }> = [];
@@ -1917,7 +1919,9 @@ export class MemoryIndexManager implements MemorySearchManager {
       }
     }
 
-    if (missing.length === 0) return embeddings;
+    if (missing.length === 0) {
+      return embeddings;
+    }
 
     const requests: VoyageBatchRequest[] = [];
     const mapping = new Map<string, { index: number; hash: string }>();
@@ -1949,13 +1953,17 @@ export class MemoryIndexManager implements MemorySearchManager {
         }),
       fallback: async () => await this.embedChunksInBatches(chunks),
     });
-    if (Array.isArray(batchResult)) return batchResult;
+    if (Array.isArray(batchResult)) {
+      return batchResult;
+    }
     const byCustomId = batchResult;
 
     const toCache: Array<{ hash: string; embedding: number[] }> = [];
     for (const [customId, embedding] of byCustomId.entries()) {
       const mapped = mapping.get(customId);
-      if (!mapped) continue;
+      if (!mapped) {
+        continue;
+      }
       embeddings[mapped.index] = embedding;
       toCache.push({ hash: mapped.hash, embedding });
     }
