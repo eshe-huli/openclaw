@@ -5,7 +5,20 @@
  * messaging, crypto key exchange, memory, and auto-reconnect with backoff.
  */
 
-import WebSocket from "ws";
+// WebSocket — use pre-compiled JS bridge to bypass jiti module resolution.
+// The bridge wraps globalThis.WebSocket (Bun native) with Node-style .on() API.
+// Falls back to `ws` npm package for pure Node.js environments.
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const WebSocket: any = (() => {
+  try {
+    // Pre-compiled bridge (not transpiled by jiti, uses globalThis.WebSocket)
+    return require("./ws-bridge.js");
+  } catch {
+    // Fallback: ws package (Node.js)
+    return require("ws");
+  }
+})();
+
 import {
   protect,
   unprotect,
@@ -64,7 +77,7 @@ type PendingReply = {
 // ── Client ───────────────────────────────────────────────────
 
 export class RingforgeClient {
-  private ws: WebSocket | null = null;
+  private ws: WebSocketLike | null = null;
   private config: RingforgeConfig;
   private handlers: RingforgeEventHandler;
   private refCounter = 0;
@@ -134,11 +147,10 @@ export class RingforgeClient {
     this.stopped = false;
     this.fleetKey = null; // Reset crypto on reconnect
 
+    // Keep URL params minimal — full agent info sent in phx_join payload.
+    // Complex JSON (arrays, nested objects) can break Phoenix query parsing.
     const agentInfo = JSON.stringify({
       name: this.config.agentName,
-      framework: this.config.framework || "openclaw",
-      capabilities: this.config.capabilities || [],
-      model: this.config.model || undefined,
     });
 
     const wsUrl = `${this.config.server}?vsn=2.0.0&api_key=${encodeURIComponent(this.config.apiKey)}&agent=${encodeURIComponent(agentInfo)}`;
@@ -162,7 +174,7 @@ export class RingforgeClient {
       this.joinFleet();
     });
 
-    this.ws.on("message", (data: WebSocket.Data) => {
+    this.ws.on("message", (data: any) => {
       try {
         const msg = JSON.parse(data.toString());
         const [_jRef, ref, _topic, event, payload] = msg;
