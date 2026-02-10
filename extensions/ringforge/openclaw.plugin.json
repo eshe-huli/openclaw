@@ -1,0 +1,19 @@
+{
+  "id": "ringforge",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": true,
+    "properties": {
+      "enabled": { "type": "boolean" },
+      "server": { "type": "string", "description": "Ringforge WebSocket server URL" },
+      "apiKey": { "type": "string", "description": "Fleet API key" },
+      "fleetId": { "type": "string", "description": "Fleet UUID" },
+      "agentName": { "type": "string", "description": "Agent display name" },
+      "capabilities": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "Agent capabilities list"
+      }
+    }
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "name": "@openclaw/ringforge",
+  "version": "0.1.0",
+  "description": "Ringforge fleet mesh plugin for OpenClaw",
+  "type": "module",
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./dist/index.js"
+    ]
+  }
+}
