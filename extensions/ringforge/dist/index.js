@@ -1414,10 +1414,35 @@ var ringforgePlugin = {
         return { prependContext: prompt };
       return;
     });
-    // agent_end auto-reply DISABLED — DMs are handled via isolated sessions
-    // through the hooks/agent endpoint. No need to leak main session responses.
-    api.on("agent_end", (_event, _ctx) => {
-      // No-op: isolated sessions handle DM replies via ringforge_send
+    // agent_end auto-reply — ONLY replies to RingForge DM-triggered turns.
+    // If the agent turn was triggered by a normal Telegram message, do nothing.
+    // If the turn was triggered by a RingForge DM (tracked by dmHandler), auto-reply.
+    api.on("agent_end", (event, ctx) => {
+      if (!dmHandler.hasPending()) return; // No pending DMs — skip (normal Telegram turn)
+      // Check if agent already used ringforge_send in this turn
+      const toolCalls = event?.toolCalls || event?.tool_calls || [];
+      const usedRingforgeSend = toolCalls.some(t => 
+        t?.name === "ringforge_send" || t?.function?.name === "ringforge_send"
+      );
+      if (usedRingforgeSend) {
+        dmHandler.clearAll();
+        return; // Agent replied explicitly
+      }
+      // Extract assistant reply and send to all pending DM senders
+      const reply = event?.response || event?.message || event?.text || "";
+      if (!reply || typeof reply !== "string" || reply.trim().length === 0) return;
+      // Use DmHandler's built-in handleAgentEnd which extracts reply from messages
+      // But since we're in agent_end, use direct sending to pending agents
+      const pendingDm = dmHandler.findMostRecentPending ? dmHandler.findMostRecentPending() : null;
+      if (pendingDm && !pendingDm.replied) {
+        try {
+          client.sendText(pendingDm.fromAgentId, reply.slice(0, 2000));
+          pendingDm.replied = true;
+          api.logger.info(`Ringforge: auto-replied to ${pendingDm.fromAgentId}`);
+        } catch (err) {
+          api.logger.warn(`Ringforge: auto-reply to ${pendingDm.fromAgentId} failed: ${err}`);
+        }
+      }
     });
     const tools = createRingforgeTools(client, ctxMgr);
     for (const tool of tools) {
