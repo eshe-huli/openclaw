@@ -468,6 +468,11 @@ class RingforgeClient {
   sendText(toAgentId, text) {
     this.sendDM(toAgentId, { type: "text", text });
   }
+  sendTyping(toAgentId) {
+    this.pushChannel("message:typing", {
+      payload: { to: toAgentId }
+    });
+  }
   broadcastActivity(kind, description, tags = []) {
     this.pushChannel("activity:broadcast", {
       payload: { kind, description, tags }

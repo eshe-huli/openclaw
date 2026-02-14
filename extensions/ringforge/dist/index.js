@@ -1187,7 +1187,7 @@ ${lane.toUpperCase()} (${count}):`);
 `);
 }
 
-// index.ts
+// index.src.ts
 function resolveConfig(pluginConfig, agentName) {
   if (!pluginConfig || pluginConfig.enabled === false)
     return null;
@@ -1245,6 +1245,27 @@ function formatDmEvent(from, message) {
       return `[Ringforge DM from ${who}] [${type}]: ${JSON.stringify(message).slice(0, 500)}`;
   }
 }
+function fallbackSystemEventWake(api, eventText, gatewayPort, hooksToken, hooksPath) {
+  try {
+    api.runtime.system.enqueueSystemEvent(eventText, { sessionKey: "agent:main:main" });
+    if (hooksToken) {
+      fetch(`http://127.0.0.1:${gatewayPort}${hooksPath}/wake`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${hooksToken}`
+        },
+        body: JSON.stringify({
+          text: eventText,
+          mode: "now"
+        })
+      }).catch(() => {});
+    }
+  } catch (e) {
+    api.logger.warn(`Ringforge: fallback wake failed: ${e}`);
+  }
+}
+
 var ringforgePlugin = {
   id: "ringforge",
   name: "Ringforge",
@@ -1306,12 +1327,56 @@ var ringforgePlugin = {
         if (injection === "silent")
           return;
         const eventText = formatDmEvent(from, message);
+        dmHandler.trackIncoming(from, message, eventText);
+        // Send typing indicator so the dashboard shows "thinking..."
         try {
-          api.runtime.system.enqueueSystemEvent(eventText, { sessionKey: "agent:main:main" });
-          dmHandler.trackIncoming(from, message, eventText);
-          api.logger.info(`Ringforge: injected DM, ${dmHandler.pendingCount} pending`);
+          client.sendTyping(from.agent_id);
+        } catch (_) {}
+        // Create a dedicated agent turn via the hooks HTTP API.
+        // This triggers a full agent turn where the DM is the user message.
+        // deliver=false keeps the response internal (not sent to Telegram).
+        // The agent_end hook catches the response and auto-replies via RingForge.
+        try {
+          const cfg = api.runtime.config.loadConfig();
+          const gatewayPort = cfg?.gateway?.port || 18789;
+          const hooksToken = cfg?.hooks?.token;
+          const hooksPath = cfg?.hooks?.path || "/hooks";
+          if (hooksToken && cfg?.hooks?.enabled) {
+            const dmContent = message.type === "text" ? message.text : JSON.stringify(message);
+            const agentMessage = `[Ringforge DM from ${name} (${from.agent_id})]\n${dmContent}\n\n[Reply via ringforge_send to ${from.agent_id}]`;
+            fetch(`http://127.0.0.1:${gatewayPort}${hooksPath}/agent`, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${hooksToken}`
+              },
+              body: JSON.stringify({
+                message: agentMessage,
+                deliver: false,
+                name: `RingForge DM from ${name}`
+              })
+            }).then((r) => r.json()).then((res) => {
+              if (res?.ok) {
+                api.logger.info(`Ringforge: DM agent turn created for ${name} (runId: ${res?.runId})`);
+              } else {
+                api.logger.warn(`Ringforge: DM agent turn failed: ${JSON.stringify(res).slice(0, 200)}`);
+                fallbackSystemEventWake(api, eventText, gatewayPort, hooksToken, hooksPath);
+              }
+            }).catch((err) => {
+              api.logger.warn(`Ringforge: DM agent call failed: ${err}`);
+              fallbackSystemEventWake(api, eventText, gatewayPort, hooksToken, hooksPath);
+            });
+          } else {
+            // No hooks configured — fall back to system event + wake
+            api.logger.info("Ringforge: no hooks config, using system event + wake");
+            const gatewayToken = cfg?.gateway?.auth?.token;
+            api.runtime.system.enqueueSystemEvent(eventText, { sessionKey: "agent:main:main" });
+            if (gatewayToken) {
+              fallbackSystemEventWake(api, eventText, gatewayPort, gatewayToken, "/hooks");
+            }
+          }
         } catch (err) {
-          api.logger.warn(`Ringforge: DM injection failed: ${err}`);
+          api.logger.warn(`Ringforge: DM handling failed: ${err}`);
         }
       },
       onRoster: (agents) => {
@@ -1349,16 +1414,10 @@ var ringforgePlugin = {
         return { prependContext: prompt };
       return;
     });
-    api.on("agent_end", (event, _ctx) => {
-      if (!dmHandler.hasPending())
-        return;
-      try {
-        if (dmHandler.handleAgentEnd(event.messages || [])) {
-          api.logger.info("Ringforge: auto-replied to DM");
-        }
-      } catch (err) {
-        api.logger.warn(`Ringforge: agent_end DM error: ${err}`);
-      }
+    // agent_end auto-reply DISABLED — DMs are handled via isolated sessions
+    // through the hooks/agent endpoint. No need to leak main session responses.
+    api.on("agent_end", (_event, _ctx) => {
+      // No-op: isolated sessions handle DM replies via ringforge_send
     });
     const tools = createRingforgeTools(client, ctxMgr);
     for (const tool of tools) {
@@ -1416,7 +1475,7 @@ var ringforgePlugin = {
     });
   }
 };
-var ringforge_default = ringforgePlugin;
+var index_src_default = ringforgePlugin;
 export {
-  ringforge_default as default
+  index_src_default as default
 };
