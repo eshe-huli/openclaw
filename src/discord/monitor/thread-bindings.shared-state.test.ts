@@ -1,4 +1,3 @@
-import { createJiti } from "jiti";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   __testing as threadBindingsTesting,
@@ -6,18 +5,22 @@ import {
   getThreadBindingManager,
 } from "./thread-bindings.js";
 
+type ThreadBindingsModule = {
+  getThreadBindingManager: typeof getThreadBindingManager;
+};
+
+async function loadThreadBindingsViaAlternateLoader(): Promise<ThreadBindingsModule> {
+  const fallbackPath = "./thread-bindings.ts?vitest-loader-fallback";
+  return (await import(/* @vite-ignore */ fallbackPath)) as ThreadBindingsModule;
+}
+
 describe("thread binding manager state", () => {
   beforeEach(() => {
     threadBindingsTesting.resetThreadBindingsForTests();
   });
 
-  it("shares managers between ESM and Jiti-loaded module instances", () => {
-    const jiti = createJiti(import.meta.url, {
-      interopDefault: true,
-    });
-    const viaJiti = jiti("./thread-bindings.ts") as {
-      getThreadBindingManager: typeof getThreadBindingManager;
-    };
+  it("shares managers between ESM and alternate-loaded module instances", async () => {
+    const viaJiti = await loadThreadBindingsViaAlternateLoader();
 
     createThreadBindingManager({
       accountId: "work",
